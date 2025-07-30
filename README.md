@@ -16,6 +16,10 @@ Abstract: The vast portion of workloads employing LLMs involves answering questi
 
 ## Modeling:
 * The modeling part of the pipeline, basically is inspired from [HuggingFace's T5 implementation](https://huggingface.co/docs/transformers/model_doc/t5), and the initialization of the weights are being done from the same.
+* About fusion operation, based on the paper, the text and image embeddings t, i ∈ ℝᵈ, we calculate the fused embedding using: Fuse(t,i) = O(V(t + i) ⊙ (1 + Rt)) + t where V, R, and O are trainable parameters of size ℝᵈ×ᵈ.
+Specifically, Figure 2 illustrates the computation of the fused embedding using the two input parameters—image embedding and text embedding, corresponding to i and t respectively in the Fuse(t, i) formula. Figure 3 depicts the encoder block: the textual semantics, after being processed through multi-head attention and a feed-forward layer, are fused with contextualized visual, t and i as in the Fuse(t, i) formulation.
+<img width="479" height="860" alt="Image" src="https://github.com/user-attachments/assets/3a2fb1a5-cd70-410a-a873-4215b84a3362" />
+<img width="467" height="686" alt="Image" src="https://github.com/user-attachments/assets/de37f8f6-667b-4ce0-89e3-d13946b61436" />
 
 
 ## Examples:
