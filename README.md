@@ -26,6 +26,7 @@ Abstract: The vast portion of workloads employing LLMs involves answering questi
 | Model Name      | Dataset Name | Number of Parameters | Overall Precision | Overall Recall | Overall F1 Score | Overall Accuracy |
 |-----------------|--------------|----------------------|-------------------|----------------|------------------|------------------|
 | Arctic-TILT     | FUNSD        |  225M                | 55.21             | 43.89          | 48.90            | 83.56            |
+| TILT(Original)  | FUNSD        |  230M                | ---               | ---            | ---              | 95.25            |
 
 Note, that in the case of my results on FUNSD, the model has not been pre-trained (the weights are intialized from the hugging face's implementation), and it has been trained for 50 epochs.
 
