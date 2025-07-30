@@ -1,0 +1,8 @@
+datasets
+huggingface_hub
+fsspec
+sentencepiece
+pytorch_lightning
+seqeval
+evaluate
+transformers==4.37.2
