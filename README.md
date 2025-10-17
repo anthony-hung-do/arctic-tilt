@@ -10,7 +10,7 @@ Abstract: The vast portion of workloads employing LLMs involves answering questi
 
 
 ## Dataset
-* I would be including the [FUNSD Dataset](https://guillaumejaume.github.io/FUNSD/).
+* I would be including the [FUNSD Dataset](https://guillaumejaume.github.io/FUNSD/) and [DocVQA Dataset](https://rrc.cvc.uab.es/?ch=17&com=introduction).
 
 ## Modeling:
 * The modeling part of the pipeline, basically is inspired from [HuggingFace's T5 implementation](https://huggingface.co/docs/transformers/model_doc/t5), and the initialization of the weights are being done from the same.
@@ -20,16 +20,29 @@ This image illustrates the procedure from the encoder block, combining Contextua
 
 
 ## Examples:
-* For finetuning Arctic-TiLT on FUNSD, the example along with the results are present [here](https://github.com/anthony-hung-do/arctic-tilt/blob/main/src/Part_3_Apply_chunked_processing.ipynb)
+* For finetuning Arctic-TiLT on FUNSD, the example along with the results are present [here](https://github.com/anthony-hung-do/arctic-tilt/blob/main/experiments/Arctic_TILT_on_funsd.ipynb)
+* For finetuning Arctic-TiLT on DocVQA, the example along with the results are present [here](https://github.com/anthony-hung-do/arctic-tilt/blob/main/experiments/Arctic_TILT_on_DocVQA.ipynb)
 
 
 ## My Results:
+
+* For NER task:
+  
 | Model Name      | Dataset Name | Number of Parameters | Overall Precision | Overall Recall | Overall F1 Score | Overall Accuracy |
 |-----------------|--------------|----------------------|-------------------|----------------|------------------|------------------|
-| Arctic-TILT     | FUNSD        |  225M                | 55.21             | 43.89          | 48.90            | 83.56            |
+| Arctic-TILT     | FUNSD        |  266M                | 55.21             | 43.89          | 48.90            | 83.56            |
 | TILT(Original)  | FUNSD        |  230M                | ---               | ---            | ---              | 95.25            |
 
 Note, that in the case of my results on FUNSD, the model has not been pre-trained (the weights are intialized from the hugging face's implementation), and it has been trained for 50 epochs.
+
+* For document_qa task:
+
+| Model Name              | Dataset Name | Number of Parameters | Exact Match       | F1 Score       | ANLS             |
+|-------------------------|--------------|----------------------|-------------------|----------------|------------------|
+| Arctic-TILT             | DocVQA       |  266M                | 52.66             | 60.68          | 60.61            |
+| Arctic-TILT(Original)   | DocVQA       |  0.8B                | ---               | ---            | 90.20            |
+
+Note, that in the case of my results on DocVQA, the model has not been pre-trained (the weights are intialized from the hugging face's implementation base on T5-base model), and it has been trained for 14 epochs, while in the original paper, the authors have intialized base on T5-large model and trained on 100,000 steps which is roughly equivalent to 100,000 / 308 = 324 epochs. (308 comes from 36,000 / 128, since 128 is the batch size mentioned in the paper, and 36,000 are the training samples in the DocVQA dataset)
 
 ## Contributors:
 - Anthony Hung Do from Swapbrain (swapbrain.com), Australia
