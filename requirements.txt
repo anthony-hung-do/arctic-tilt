@@ -6,3 +6,5 @@ pytorch_lightning
 seqeval
 evaluate
 transformers==4.37.2
+anls
+scikit-learn
