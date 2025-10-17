@@ -42,7 +42,7 @@ Note, that in the case of my results on FUNSD, the model has not been pre-traine
 | Arctic-TILT             | DocVQA       |  266M                | 52.66             | 60.68          | 60.61            |
 | Arctic-TILT(Original)   | DocVQA       |  0.8B                | ---               | ---            | 90.20            |
 
-Note, that in the case of my results on DocVQA, the model has not been pre-trained (the weights are intialized from the hugging face's implementation base on T5-base model), and it has been trained for 14 epochs, while in the original paper, the authors have intialized base on T5-large model and trained on 100,000 steps which is roughly equivalent to 100,000 / 308 = 324 epochs. (308 comes from 36,000 / 128, since 128 is the batch size mentioned in the paper, and 36,000 are the training samples in the DocVQA dataset)
+Note, that in the case of my results on DocVQA, the model has not been pre-trained (the weights are intialized from the hugging face's implementation base on T5-base model), and it has been trained for 14 epochs, while in the original paper, the authors have intialized base on T5-large model and trained on 100,000 steps which is roughly equivalent to 100,000 / 308 = 324 epochs. (308 comes from 39,500 / 128, since 128 is the batch size mentioned in the paper, and 39,500 are the training samples in the DocVQA dataset)
 
 ## Contributors:
 - Anthony Hung Do from Swapbrain (swapbrain.com), Australia
