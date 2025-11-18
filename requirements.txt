@@ -5,6 +5,8 @@ sentencepiece
 pytorch_lightning
 seqeval
 evaluate
-transformers==4.37.2
+transformers
 anls
 scikit-learn
+nvidia-ml-py3
+wandb
