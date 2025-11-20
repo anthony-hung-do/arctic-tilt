@@ -47,4 +47,4 @@ Note, that in the case of my results on DocVQA, the model has not been pre-train
 ## Contributors:
 - Anthony Hung Do from Swapbrain (swapbrain.com), Australia
 - Hoang Xuan Linh from Da Nang University of Science and Technology, Vietnam
-- Ho Phuc Hy from University of Aix-Marseille University, France
+- Ho Phuc Hy from Da Nang University of Science and Technology, Vietnam
