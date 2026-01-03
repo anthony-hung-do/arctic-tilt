@@ -21,8 +21,8 @@ from config.model_config import (
 )
 from utils.auth import setup_authentication
 from models.tilt_model import TiLTDocQATransformer
-from data.dataset import DocVQADataset
-from data.collate import DocVQACollateFn
+from data.dataset import DocVQADataset, PretrainDataset
+from data.collate import DocVQACollateFn, PretrainCollateFn
 from training.optimizer import create_optimizer
 from training.scheduler import get_arctic_tilt_scheduler
 from training.callbacks import ValidationMetricsCallback
@@ -30,6 +30,193 @@ from metrics import compute_docqa_metrics
 
 setup_authentication()
 device = "cuda" if torch.cuda.is_available() else "cpu"
+
+# ============================================
+# PRETRAIN FUNCTION
+# ============================================
+def pretrain_arctic_tilt(
+    imdb_file: str,
+    pdf_root: str,
+    ocr_root: str,
+    output_dir: str,
+    config,
+    tokenizer,
+    num_epochs: int = 3,
+    batch_size: int = 1,
+    learning_rate: float = 1e-3,
+    resume_from_checkpoint: str = None
+):
+    """
+    Main pretraining function for Arctic-TILT using MLM
+    """
+    # Initialize wandb for pretraining
+    run_id_file = os.path.join(output_dir, "wandb_pretrain_run_id.txt")
+    if os.path.exists(run_id_file):
+        with open(run_id_file, 'r') as f:
+            run_id = f.read().strip()
+        print(f"📊 Resuming wandb pretrain run: {run_id}")
+        wandb.init(
+            project="Arctic-TILT Pretrain MLM",
+            id=run_id,
+            resume="must",
+            entity="xuanlinh-work-dut",
+            config=config.__dict__ if hasattr(config, '__dict__') else config
+        )
+    else:
+        print(f"📊 Starting new wandb pretrain run")
+        wandb.init(
+            project="Arctic-TILT Pretrain MLM",
+            entity="xuanlinh-work-dut",
+            config=config.__dict__ if hasattr(config, '__dict__') else config
+        )
+        os.makedirs(output_dir, exist_ok=True)
+        with open(run_id_file, 'w') as f:
+            f.write(wandb.run.id)
+
+    print("="*80)
+    print("🚀 ARCTIC-TILT PRETRAINING")
+    print("="*80)
+    
+    # Add mask token if not exists
+    if tokenizer.mask_token is None:
+        tokenizer.add_special_tokens({'mask_token': '<mask>'})
+    
+    print(f"\n📚 Tokenizer initialized:")
+    print(f"   • Vocab size: {len(tokenizer)}")
+    print(f"   • Mask token: '{tokenizer.mask_token}' (id: {tokenizer.mask_token_id})")
+    
+    # Create dataset
+    print(f"\n📂 Loading pretrain dataset from {imdb_file}...")
+    pretrain_dataset = PretrainDataset(
+        imdb_file=imdb_file,
+        pdf_root=pdf_root,
+        ocr_root=ocr_root,
+        tokenizer=tokenizer,
+        max_length=config.model_max_length,
+        mlm_probability=0.15,
+        use_chunked_processing=config.use_chunked_processing
+    )
+    
+    # Create data collator
+    collate_fn = PretrainCollateFn(
+        tokenizer=tokenizer,
+        use_chunked_processing=config.use_chunked_processing
+    )
+    
+    # Initialize model
+    print(f"\n🏗️ Initializing Arctic-TILT model for pretraining...")
+    model = TiLTDocQATransformer(config)
+    
+    print(f"   • Original vocab size: {model.t5_model.config.vocab_size}")
+    print(f"   • Resizing to match tokenizer: {len(tokenizer)}")
+    
+    # Resize embeddings for T5 model
+    model.t5_model.resize_token_embeddings(len(tokenizer))
+    
+    print(f"   • New vocab size: {model.t5_model.config.vocab_size}")
+    print(f"   • Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+    
+    # Calculate training steps
+    total_steps = (len(pretrain_dataset) // batch_size) * num_epochs
+    warmup_steps = int(0.01 * total_steps)
+    
+    print(f"\n📊 Pretraining configuration:")
+    print(f"   • Total samples: {len(pretrain_dataset)}")
+    print(f"   • Batch size: {batch_size}")
+    print(f"   • Epochs: {num_epochs}")
+    print(f"   • Total steps: {total_steps}")
+    print(f"   • Warmup steps: {warmup_steps}")
+    print(f"   • Learning rate: {learning_rate}")
+    
+    # Training arguments
+    training_args = TrainingArguments(
+        output_dir=output_dir,
+        overwrite_output_dir=False,
+        
+        num_train_epochs=num_epochs,
+        per_device_train_batch_size=batch_size,
+        gradient_accumulation_steps=128,
+        gradient_checkpointing=True,
+        max_grad_norm=1.0,
+        
+        learning_rate=learning_rate,
+        weight_decay=1e-5,
+        
+        bf16=True,
+        
+        logging_dir=os.path.join(output_dir, "logs"),
+        logging_strategy="steps",
+        logging_steps=10,
+        logging_first_step=True,
+        
+        save_strategy="epoch",
+        save_total_limit=3,
+        
+        dataloader_num_workers=8,
+        dataloader_pin_memory=True,
+        
+        remove_unused_columns=False,
+        save_safetensors=False,
+        
+        report_to=["wandb"],
+        
+        seed=42,
+        data_seed=42,
+    )
+    
+    # Create optimizer and scheduler
+    optimizer = create_optimizer(
+        model,
+        learning_rate=learning_rate,
+        weight_decay=1e-5
+    )
+    
+    lr_scheduler = get_arctic_tilt_scheduler(optimizer, total_steps)
+    
+    # Initialize Trainer
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=pretrain_dataset,
+        data_collator=collate_fn,
+        optimizers=(optimizer, lr_scheduler),
+    )
+    
+    # Start training
+    print("\n" + "="*80)
+    print("🎯 Starting pretraining...")
+    print("="*80 + "\n")
+    
+    result = trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+    
+    # Save final model
+    final_model_dir = os.path.join(output_dir, "final_model")
+    print(f"\n💾 Saving pretrained model to {final_model_dir}...")
+    trainer.save_model(final_model_dir)
+    tokenizer.save_pretrained(final_model_dir)
+    
+    wandb.log({
+        "pretrain/final_loss": result.training_loss,
+        "pretrain/total_steps": result.global_step
+    })
+
+    wandb.finish()
+    # Save training summary
+    summary_path = os.path.join(final_model_dir, "pretrain_summary.json")
+    with open(summary_path, 'w') as f:
+        json.dump({
+            "final_loss": result.training_loss,
+            "total_steps": result.global_step,
+            "num_epochs": num_epochs,
+            "num_samples": len(pretrain_dataset),
+        }, f, indent=2)
+    
+    print(f"\n✅ Pretraining completed!")
+    print(f"   • Final loss: {result.training_loss:.4f}")
+    print(f"   • Total steps: {result.global_step}")
+    print(f"   • Model saved to: {final_model_dir}")
+    
+    return trainer, model, final_model_dir
 
 hf_ds = load_dataset("hxlinh/SP-DocVQA")
 
@@ -74,6 +261,66 @@ test_encoded = tokenizer_docqa.encode(test_text)
 test_decoded = tokenizer_docqa.decode(test_encoded)
 print(f"Tokenizer test: '{test_text}' -> {test_encoded} -> '{test_decoded}'")
 
+# ============================================
+# STEP 1: PRETRAINING (Optional)
+# ============================================
+ENABLE_PRETRAIN = os.getenv("ENABLE_PRETRAIN", "false").lower() == "true"
+PRETRAIN_DATA_PATH = os.getenv("PRETRAIN_DATA_PATH", "./data/pretrain")
+
+if ENABLE_PRETRAIN and os.path.exists(PRETRAIN_DATA_PATH):
+    print("\n" + "="*80)
+    print("STEP 1: PRETRAINING WITH MLM")
+    print("="*80)
+    
+    # Setup pretrain paths
+    imdb_file = os.path.join(PRETRAIN_DATA_PATH, "imdb_pretrain_p0.npy")
+    pdf_root = os.path.join(PRETRAIN_DATA_PATH, "pdfs")
+    ocr_root = os.path.join(PRETRAIN_DATA_PATH, "OCR")
+    pretrain_output_dir = os.path.join(CKPT_PATH_DOCQA, "pretrain_output")
+    
+    # Check if pretrain data exists
+    if os.path.exists(imdb_file):
+        # Run pretraining
+        _, _, pretrained_model_path = pretrain_arctic_tilt(
+            imdb_file=imdb_file,
+            pdf_root=pdf_root,
+            ocr_root=ocr_root,
+            output_dir=pretrain_output_dir,
+            config=t5_config_docvqa,
+            tokenizer=tokenizer_docqa,
+            num_epochs=3,
+            batch_size=1,
+            learning_rate=1e-3
+        )
+        
+        print(f"\n Loading pretrained weights for fine-tuning...")
+        # Load pretrained model for fine-tuning
+        t5_config_docvqa.update(dict(
+            load_weights=False  # Disable auto-load for pretraining
+        ))
+        model = TiLTDocQATransformer(t5_config_docvqa)
+        model.t5_model.resize_token_embeddings(len(tokenizer_docqa))
+        
+        pretrained_state = torch.load(
+            os.path.join(pretrained_model_path, "pytorch_model.bin"),
+            map_location=device
+        )
+        model.load_state_dict(pretrained_state, strict=False)
+        print(f"   • Pretrained weights loaded successfully!")
+    else:
+        print(f"\n⚠️  Pretrain data not found at {imdb_file}")
+        print(f"   Skipping pretraining, will use randomly initialized model")
+        model = TiLTDocQATransformer(t5_config_docvqa)
+else:
+    print("\n Pretraining disabled, using randomly initialized model")
+    model = TiLTDocQATransformer(t5_config_docvqa)
+
+# ============================================
+# STEP 2: FINE-TUNING ON DocVQA
+# ============================================
+print("\n" + "="*80)
+print("STEP 2: FINE-TUNING ON DocVQA")
+print("="*80)
 # Tạo datasets
 train_ds_docqa = DocVQADataset(
     docvqa_dataset['train'],
@@ -151,16 +398,16 @@ else:
     with open(run_id_file, 'w') as f:
         f.write(wandb.run.id)
 
-print(" Initializing Arctic-TILT model...")
-model = TiLTDocQATransformer(t5_config_docvqa)
+# print(" Initializing Arctic-TILT model...")
+# model = TiLTDocQATransformer(t5_config_docvqa)
 
-# Verify config
-print(f"\n Model Configuration:")
-print(f"   • Model: {MODEL_NAME}")
-print(f"   • Max sequence length: {t5_config_docvqa.model_max_length}")
-print(f"   • Chunk length: {t5_config_docvqa.core_chunk_length}")
-print(f"   • Use chunked processing: {t5_config_docvqa.use_chunked_processing}")
-print(f"   • Use post-fusion: {t5_config_docvqa.use_post_fusion}")
+# # Verify config
+# print(f"\n Model Configuration:")
+# print(f"   • Model: {MODEL_NAME}")
+# print(f"   • Max sequence length: {t5_config_docvqa.model_max_length}")
+# print(f"   • Chunk length: {t5_config_docvqa.core_chunk_length}")
+# print(f"   • Use chunked processing: {t5_config_docvqa.use_chunked_processing}")
+# print(f"   • Use post-fusion: {t5_config_docvqa.use_post_fusion}")
 
 total_train_samples = len(train_ds_docqa)
 batch_size = BATCH_SIZE
@@ -297,3 +544,4 @@ with open(summary_path, 'w') as f:
         "total_steps": result.global_step,
         "num_epochs": num_epochs,
     }, f, indent=2)
+print("\n🎉 All training completed!")

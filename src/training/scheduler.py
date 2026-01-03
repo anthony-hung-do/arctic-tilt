@@ -1,3 +1,5 @@
+from torch.optim.lr_scheduler import SequentialLR, LinearLR, CosineAnnealingLR, ConstantLR
+
 def get_arctic_tilt_scheduler(optimizer, num_training_steps):
     """
     Arctic-TILT scheduler:
@@ -5,7 +7,6 @@ def get_arctic_tilt_scheduler(optimizer, num_training_steps):
     - 89% linear: 1e-3 → 2e-4
     - 10% cosine: 2e-4 → 5e-5
     """
-    from torch.optim.lr_scheduler import SequentialLR, LinearLR, CosineAnnealingLR, ConstantLR
 
     warmup_steps = max(1, int(0.01 * num_training_steps))
     linear_steps = max(1, int(0.89 * num_training_steps))

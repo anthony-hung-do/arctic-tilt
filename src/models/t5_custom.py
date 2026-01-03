@@ -202,6 +202,7 @@ class ChunkedProcessor:
 
         return aligned_text_chunk, aligned_vision_chunk, aligned_attention_mask, alignment_info
 
+
     def process_long_sequence(self,
                         encoder_func,
                         input_ids: torch.Tensor = None,
@@ -211,105 +212,128 @@ class ChunkedProcessor:
                         prefix_length: int = 1,
                         **encoder_kwargs) -> torch.Tensor:
         """
-        Process long sequence using chunked processing with alignment between text chunks and vision embeddings.
+        Process long sequence using chunked processing with ALIGNED text and vision chunks.
         """
 
         if self.debug and self.sample_count < 5:
-            print(f"\n SAMPLE {self.sample_count + 1} - PROCESS LONG SEQUENCE:")
+            print(f"\n  SAMPLE {self.sample_count + 1} - PROCESS LONG SEQUENCE:")
             if inputs_embeds is not None:
-                print(f"    Input text embeddings shape: {inputs_embeds.shape}")
+                print(f"    Input text embeddings: {inputs_embeds.shape}")
             if vision_embeddings is not None:
-                print(f"     Input vision embeddings shape: {vision_embeddings.shape}")
+                print(f"    Input vision embeddings: {vision_embeddings.shape}")
 
-        # Create chunks for TEXT only
-        chunked_input_ids, chunked_masks, chunked_embeds, chunk_info = self.create_chunks(
+        #  Chunk TEXT embeddings
+        chunked_input_ids, chunked_masks, chunked_text_embeds, chunk_info = self.create_chunks(
             input_ids=input_ids,
             attention_mask=attention_mask,
             inputs_embeds=inputs_embeds,
             prefix_length=prefix_length
         )
 
-        # Process each chunk with aligned embeddings
-        chunk_outputs = []
-        for chunk_idx, (chunk_input, chunk_mask, chunk_embeds) in enumerate(
-            zip(chunked_input_ids, chunked_masks, chunked_embeds)
-        ):
+        # Chunk VISION embeddings
+        chunked_vision_embeds = []
+
+        if vision_embeddings is not None:
             if self.debug and self.sample_count < 5:
-                print(f"\n    PROCESSING CHUNK {chunk_idx}:")
+                print(f"\n     CHUNKING VISION EMBEDDINGS:")
 
-            # Prepare encoder arguments for this chunk
-            encoder_kwargs_copy = encoder_kwargs.copy()
+            # Extract vision prefix (same as text)
+            if prefix_length > 0:
+                vision_prefix = vision_embeddings[:, :prefix_length, :]
+                vision_content = vision_embeddings[:, prefix_length:, :]
+            else:
+                vision_prefix = None
+                vision_content = vision_embeddings
 
-            alignment_info = None
+            # Chunk vision content according to chunk_info (positions from text chunking)
+            for chunk_idx, chunk_start_pos in enumerate(chunk_info):
+                # Calculate chunk boundaries for vision
+                chunk_size = self.core_chunk_length - prefix_length if prefix_length > 0 else self.core_chunk_length
+                chunk_end_pos = min(chunk_start_pos + chunk_size, vision_content.shape[1])
 
-            if chunk_embeds is not None and vision_embeddings is not None:
-                aligned_text_chunk, aligned_vision_chunk, aligned_attention_mask, alignment_info = self.align_embeddings_for_chunk(
-                    text_chunk=chunk_embeds, vision_embeddings=vision_embeddings, attention_mask=chunk_mask, chunk_idx=chunk_idx
-                )
+                # Extract vision chunk
+                vision_chunk = vision_content[:, chunk_start_pos:chunk_end_pos, :]
 
-                encoder_kwargs_copy.update({
-                    'inputs_embeds': aligned_text_chunk,
-                    'attention_mask': aligned_attention_mask,
-                    'vision_embeddings': aligned_vision_chunk,
-                    'input_ids': None
-                })
+                # Prepend vision prefix to chunk
+                if vision_prefix is not None:
+                    vision_chunk = torch.cat([vision_prefix, vision_chunk], dim=1)
+
+                chunked_vision_embeds.append(vision_chunk)
 
                 if self.debug and self.sample_count < 5:
-                    print(f"       Input to encoder: text={aligned_text_chunk.shape[1]}, vision={aligned_vision_chunk.shape[1]}")
+                    print(f"       Vision Chunk {chunk_idx}: [{chunk_start_pos}:{chunk_end_pos}] + prefix({prefix_length}) = {vision_chunk.shape[1]} tokens")
+
+        # Process each chunk
+        chunk_outputs = []
+
+        for chunk_idx, (chunk_input, chunk_mask, chunk_text_embeds) in enumerate(
+            zip(chunked_input_ids, chunked_masks, chunked_text_embeds)
+        ):
+            if self.debug and self.sample_count < 5:
+                print(f"\n     PROCESSING CHUNK {chunk_idx}:")
+
+            # Get corresponding vision chunk
+            chunk_vision_embeds = chunked_vision_embeds[chunk_idx] if chunked_vision_embeds else None
+
+            # Prepare encoder kwargs
+            encoder_kwargs_copy = encoder_kwargs.copy()
+
+            #  ALIGNED CHUNKS: No padding
+            if chunk_text_embeds is not None and chunk_vision_embeds is not None:
+                text_len = chunk_text_embeds.shape[1]
+                vision_len = chunk_vision_embeds.shape[1]
+
+                if self.debug and self.sample_count < 5:
+                    print(f"       Text chunk: {text_len} tokens")
+                    print(f"       Vision chunk: {vision_len} tokens")
+
+                #  ASSERTION: Lengths should match after aligned chunking
+                # if text_len != vision_len:
+                #     # Handle mismatch (trim to minimum)
+                #     min_len = min(text_len, vision_len)
+                #     chunk_text_embeds = chunk_text_embeds[:, :min_len, :]
+                #     chunk_vision_embeds = chunk_vision_embeds[:, :min_len, :]
+                #     chunk_mask = chunk_mask[:, :min_len]
+
+                #     if self.debug and self.sample_count < 5:
+                #         print(f"        Trimmed to aligned length: {min_len}")
+
+                encoder_kwargs_copy.update({
+                    'inputs_embeds': chunk_text_embeds,
+                    'attention_mask': chunk_mask,
+                    'vision_embeddings': chunk_vision_embeds,
+                    'input_ids': None
+                })
             else:
-                # No alignment needed
+                # No vision embeddings case
                 encoder_kwargs_copy.update({
                     'input_ids': chunk_input,
                     'attention_mask': chunk_mask,
-                    'vision_embeddings': vision_embeddings
+                    'inputs_embeds': chunk_text_embeds,
+                    'vision_embeddings': None
                 })
+                print(f"No vision embeddings case")
 
-            # Process chunk with aligned embeddings
+            #  Process chunk with encoder
             chunk_output = encoder_func(**encoder_kwargs_copy)
             chunk_hidden = chunk_output.last_hidden_state if hasattr(chunk_output, 'last_hidden_state') else chunk_output
 
             if self.debug and self.sample_count < 5:
-                print(f"       Raw encoder output shape: {chunk_hidden.shape}")
+                print(f"        Chunk output: {chunk_hidden.shape}")
 
-            # SMART TRIMMING: Only trim if TEXT was padded
-            if alignment_info is not None and alignment_info['text_was_padded']:
-                # TEXT được pad, nên cần trim về độ dài text gốc
-                original_text_length = alignment_info['original_text_length']
-                chunk_hidden = chunk_hidden[:, :original_text_length, :]
-
-                if self.debug and self.sample_count < 5:
-                    print(f"        TRIMMED (text was padded): {alignment_info['final_length']} → {original_text_length}")
-
-            elif alignment_info is not None and alignment_info['vision_was_padded']:
-                # VISION được pad, giữ nguyên output length = text length
-                if self.debug and self.sample_count < 5:
-                    print(f"       KEPT (vision was padded): {chunk_hidden.shape[1]} tokens")
-                pass
-            else:
-                if self.debug and self.sample_count < 5:
-                    print(f"       KEPT (no alignment): {chunk_hidden.shape[1]} tokens")
-
-            if self.debug and self.sample_count < 5:
-                print(f"       Final chunk output shape: {chunk_hidden.shape}")
-
-            # No alignment case - keep as is
             chunk_outputs.append(chunk_hidden)
 
+            # Memory cleanup
             del chunk_hidden
             if hasattr(torch.cuda, 'empty_cache'):
                 torch.cuda.empty_cache()
 
         # Recombine chunks
-        if self.debug and self.sample_count < 5:
-            print(f"\n    RECOMBINING CHUNKS:")
-            for i, chunk in enumerate(chunk_outputs):
-                print(f"       Chunk {i} shape: {chunk.shape}")
-
         final_output = self.recombine_chunk_outputs(chunk_outputs, prefix_length)
 
         if self.debug and self.sample_count < 5:
-            print(f"    FINAL OUTPUT SHAPE: {final_output.shape}")
-            print(f"   " + "="*60)
+            print(f"\n     FINAL OUTPUT: {final_output.shape}")
+            print(f"    " + "="*60)
             self.sample_count += 1
 
         return final_output
@@ -1087,7 +1111,7 @@ class T5Stack(t5.modeling_t5.T5Stack):
 
     def forward(
         self,
-        input_ids=None,
+        input_ids=None, # List int
         attention_mask=None,
         encoder_hidden_states=None,
         encoder_attention_mask=None,

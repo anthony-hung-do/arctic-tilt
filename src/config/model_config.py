@@ -3,7 +3,7 @@ from transformers import AutoConfig
 
 # Model constants
 MODEL_NAME = "t5-large"
-CKPT_PATH_DOCQA = "./tilt_docqa/models"
+CKPT_PATH_DOCQA = "../models"
 
 # Visual Embedding parameters
 IN_CHANNELS = 3
