@@ -10,3 +10,6 @@ anls
 scikit-learn
 nvidia-ml-py3
 wandb
+pynvml
+pdf2image
+# sudo apt-get install poppler-utils
