@@ -3,6 +3,9 @@ from torchvision.transforms import ToTensor
 import torch
 from PIL import Image
 import numpy as np
+import os
+
+PRETRAIN_DATA_PATH = os.getenv("PRETRAIN_DATA_PATH", "../data")
 
 class DocVQADataset(Dataset):
     def __init__(self, ds, tokenizer, max_source_length=512, max_target_length=128,
@@ -180,7 +183,7 @@ class PretrainDataset(Dataset):
         transform=None,
         use_chunked_processing=True
     ):
-        self.data = np.load(imdb_file, allow_pickle=True)[1:1350]  # Skip metadata at index 0
+        self.data = np.load(imdb_file, allow_pickle=True)[1:23000]  # Skip metadata at index 0
         self.pdf_root = Path(pdf_root)
         self.ocr_root = Path(ocr_root)
         self.tokenizer = tokenizer
@@ -226,8 +229,7 @@ class PretrainDataset(Dataset):
 
     def _load_page_image(self, image_id, page_num=0):
         """Load PDF page as image"""
-        # pdf_path = self.pdf_root / image_id / f"{image_id}.pdf"
-        pdf_path = os.path.join(DATA_PATH, f"sample/pdfs/{image_id}/{image_id}.pdf")
+        pdf_path = self.pdf_root / image_id / f"{image_id}.pdf"
         try:
             images = pdf2image.convert_from_path(
                 pdf_path,

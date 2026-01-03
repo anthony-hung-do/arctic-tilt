@@ -12,4 +12,7 @@ nvidia-ml-py3
 wandb
 pynvml
 pdf2image
+torchvision
+python-dotenv
+accelerate>=0.26.0
 # sudo apt-get install poppler-utils
