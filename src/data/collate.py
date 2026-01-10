@@ -92,15 +92,51 @@ class DocVQACollateFn(object):
 
 class PretrainCollateFn:
     """Collate function for pretrain dataloader"""
+    # def __init__(self, tokenizer, use_chunked_processing=True, log_file='logs/pretrain_samples.log', start_logging_step=117):
     def __init__(self, tokenizer, use_chunked_processing=True):
         self.tokenizer = tokenizer
         self.use_chunked_processing = use_chunked_processing
+        # self.log_file = log_file
+        # self.start_logging_step = start_logging_step
+        # self.current_step = 0
+
+        # if self.log_file:
+        #     import os
+        #     os.makedirs(os.path.dirname(self.log_file), exist_ok=True)
+        #     with open(self.log_file, 'w') as f:
+        #         f.write("step,doc_id,sequence_length,has_labels\n")
 
     def __call__(self, batch):
+
+        # if self.log_file and self.current_step >= self.start_logging_step:
+        #     self._log_batch_info(batch)
+        
+        # self.current_step += 1
+
         if self.use_chunked_processing:
             return self._collate_variable_length(batch)
         else:
             return self._collate_fixed_length(batch)
+
+    # def _log_batch_info(self, batch):
+    #     """Log information about samples in the current batch"""
+    #     import datetime
+        
+    #     with open(self.log_file, 'a') as f:
+    #         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    #         f.write(f"\n# Step {self.current_step} - {timestamp}\n")
+            
+    #         for idx, item in enumerate(batch):
+    #             doc_id = item.get('doc_id', 'unknown')
+    #             seq_len = item.get('original_length', len(item['input_ids']))
+    #             has_labels = 'labels' in item
+                
+    #             f.write(f"{self.current_step},{doc_id},{seq_len},{has_labels}\n")
+                
+    #             # Log additional details
+    #             if idx == 0:  # Log chi tiết mẫu đầu tiên
+    #                 f.write(f"# Sample details: input_ids shape={item['input_ids'].shape}, ")
+    #                 f.write(f"pixel_values shape={item['pixel_values'].shape}\n")
 
     def _collate_variable_length(self, batch):
         """Handle variable length sequences"""
