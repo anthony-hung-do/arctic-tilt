@@ -2,8 +2,8 @@
 from transformers import AutoConfig
 
 # Model constants
-MODEL_NAME = "t5-large"
-CKPT_PATH_DOCQA = "../models"
+MODEL_NAME = "t5-base"
+CKPT_PATH_DOCQA = "../ckpt"
 
 # Visual Embedding parameters
 IN_CHANNELS = 3
@@ -14,9 +14,10 @@ SPATIAL_SCALE = 48 / 384
 OUTPUT_SIZE = (3, 3)
 
 # Training parameters
-DROPOUT_RATE = 0.1
+DROPOUT_RATE = 0.2
 LOAD_WEIGHTS = True
 MODEL_MAX_LENGTH = 150000
+PRETRAIN_MAX_LENGTH = 8000
 MAX_TARGET_LENGTH = 128
 LEARNING_RATE = 1e-3
 WEIGHT_DECAY = 1e-5
@@ -27,9 +28,12 @@ CHUNK_OVERLAP = 0
 USE_CHUNKED_PROCESSING = True
 PREFIX_LENGTH = 8
 
-MAX_EPOCHS = 30
-BATCH_SIZE = 2
-GRAD_ACC_STEPS = 64
+PRETRAIN_MAX_EPOCHS = 1
+PRETRAIN_BATCH_SIZE = 1
+PRETRAIN_GRAD_ACC_STEPS = 128
+MAX_EPOCHS = 10
+BATCH_SIZE = 4
+GRAD_ACC_STEPS = 2
 
 def get_t5_config():
     """Return configured T5 config"""
@@ -57,4 +61,10 @@ def get_t5_config():
         prefix_length=PREFIX_LENGTH,
         task_type="document_qa",
     ))
+    return config
+
+def get_pretrain_config():
+    """Return config for pretraining with lower max_length"""
+    config = get_t5_config()
+    config.model_max_length = PRETRAIN_MAX_LENGTH
     return config
