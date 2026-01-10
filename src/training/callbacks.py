@@ -89,3 +89,19 @@ class ValidationMetricsCallback(TrainerCallback):
                     "val_anls": custom_metrics['anls'],
                     "epoch": state.epoch
                 })
+
+class ClearCacheCallback(TrainerCallback):
+    def on_step_end(self, args, state, control, **kwargs):
+        if state.global_step % args.gradient_accumulation_steps == 0:
+            torch.cuda.empty_cache()  
+
+def print_gpu_memory():
+    if torch.cuda.is_available():
+        allocated = torch.cuda.memory_allocated() / 1e9
+        reserved = torch.cuda.memory_reserved() / 1e9
+        print(f"💾 GPU Memory: Allocated={allocated:.2f}GB, Reserved={reserved:.2f}GB")
+
+class MemoryMonitorCallback(TrainerCallback):
+    def on_step_end(self, args, state, control, **kwargs):
+        if state.global_step % 10 == 0:
+            print_gpu_memory()

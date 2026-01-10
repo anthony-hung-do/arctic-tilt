@@ -1,4 +1,6 @@
 import os
+os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True,garbage_collection_threshold:0.6"
+
 import math
 from transformers import AutoTokenizer, AutoConfig
 from datasets import load_dataset, DatasetDict
@@ -16,8 +18,8 @@ import random
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 from config.model_config import (
-    MODEL_NAME, CKPT_PATH_DOCQA, BATCH_SIZE, GRAD_ACC_STEPS,
-    get_t5_config
+    MODEL_NAME, CKPT_PATH_DOCQA, BATCH_SIZE, GRAD_ACC_STEPS, PRETRAIN_MAX_EPOCHS, PRETRAIN_BATCH_SIZE, PRETRAIN_GRAD_ACC_STEPS,
+    get_t5_config, get_pretrain_config
 )
 from utils.auth import setup_authentication
 from models.tilt_model import TiLTDocQATransformer
@@ -25,7 +27,7 @@ from data.dataset import DocVQADataset, PretrainDataset
 from data.collate import DocVQACollateFn, PretrainCollateFn
 from training.optimizer import create_optimizer
 from training.scheduler import get_arctic_tilt_scheduler
-from training.callbacks import ValidationMetricsCallback
+from training.callbacks import ValidationMetricsCallback, ClearCacheCallback, MemoryMonitorCallback
 from metrics import compute_docqa_metrics
 
 setup_authentication()
@@ -35,15 +37,14 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 # PRETRAIN FUNCTION
 # ============================================
 def pretrain_arctic_tilt(
-    imdb_file: str,
-    pdf_root: str,
-    ocr_root: str,
+    data_root: str,
     output_dir: str,
     config,
     tokenizer,
-    num_epochs: int = 3,
+    num_epochs: int = 1,
     batch_size: int = 1,
     learning_rate: float = 1e-3,
+    save_steps: int = 300,
     resume_from_checkpoint: str = None
 ):
     """
@@ -86,15 +87,14 @@ def pretrain_arctic_tilt(
     print(f"   • Mask token: '{tokenizer.mask_token}' (id: {tokenizer.mask_token_id})")
     
     # Create dataset
-    print(f"\n📂 Loading pretrain dataset from {imdb_file}...")
+    print(f"\n📂 Loading pretrain dataset from {data_root}...")
     pretrain_dataset = PretrainDataset(
-        imdb_file=imdb_file,
-        pdf_root=pdf_root,
-        ocr_root=ocr_root,
+        data_root=data_root,
         tokenizer=tokenizer,
         max_length=config.model_max_length,
         mlm_probability=0.15,
-        use_chunked_processing=config.use_chunked_processing
+        use_chunked_processing=config.use_chunked_processing,
+        max_tokens_limit=5000
     )
     
     # Create data collator
@@ -117,15 +117,16 @@ def pretrain_arctic_tilt(
     print(f"   • Model parameters: {sum(p.numel() for p in model.parameters()):,}")
     
     # Calculate training steps
-    total_steps = (len(pretrain_dataset) // batch_size) * num_epochs
-    warmup_steps = int(0.01 * total_steps)
+    total_steps = math.ceil((len(pretrain_dataset) / batch_size / PRETRAIN_GRAD_ACC_STEPS) * num_epochs)
+    # warmup_steps = int(0.01 * total_steps)
     
     print(f"\n📊 Pretraining configuration:")
     print(f"   • Total samples: {len(pretrain_dataset)}")
     print(f"   • Batch size: {batch_size}")
+    print(f"   • Gradient accumulation steps: {PRETRAIN_GRAD_ACC_STEPS}")
     print(f"   • Epochs: {num_epochs}")
     print(f"   • Total steps: {total_steps}")
-    print(f"   • Warmup steps: {warmup_steps}")
+    print(f"   • Save checkpoint every: {save_steps} steps")
     print(f"   • Learning rate: {learning_rate}")
     
     # Training arguments
@@ -135,24 +136,27 @@ def pretrain_arctic_tilt(
         
         num_train_epochs=num_epochs,
         per_device_train_batch_size=batch_size,
-        gradient_accumulation_steps=128,
+        gradient_accumulation_steps=PRETRAIN_GRAD_ACC_STEPS,
         gradient_checkpointing=True,
         max_grad_norm=1.0,
+        gradient_checkpointing_kwargs={"use_reentrant": False},
         
         learning_rate=learning_rate,
         weight_decay=1e-5,
         
         bf16=True,
-        
+        # fp16=True,
+
         logging_dir=os.path.join(output_dir, "logs"),
         logging_strategy="steps",
         logging_steps=10,
         logging_first_step=True,
         
-        save_strategy="epoch",
+        save_strategy="steps",
+        save_steps=save_steps,
         save_total_limit=3,
         
-        dataloader_num_workers=8,
+        dataloader_num_workers=4,
         dataloader_pin_memory=True,
         
         remove_unused_columns=False,
@@ -172,6 +176,9 @@ def pretrain_arctic_tilt(
     )
     
     lr_scheduler = get_arctic_tilt_scheduler(optimizer, total_steps)
+
+    memory_callback = MemoryMonitorCallback()
+    clear_cache_callback = ClearCacheCallback()
     
     # Initialize Trainer
     trainer = Trainer(
@@ -180,6 +187,8 @@ def pretrain_arctic_tilt(
         train_dataset=pretrain_dataset,
         data_collator=collate_fn,
         optimizers=(optimizer, lr_scheduler),
+        # callbacks=[memory_callback],
+        callbacks=[memory_callback, clear_cache_callback],
     )
     
     # Start training
@@ -218,14 +227,15 @@ def pretrain_arctic_tilt(
     
     return trainer, model, final_model_dir
 
-hf_ds = load_dataset("hxlinh/SP-DocVQA")
+hf_ds = load_dataset("nielsr/docvqa_1200_examples")
 
 train_split = hf_ds['train'].train_test_split(test_size=0.1, seed=42)
 
 docvqa_dataset = DatasetDict({
     'train': train_split['train'],
     'validation': train_split['test'],
-    'test': hf_ds['val']
+    'test': hf_ds['test']
+    # 'test': hf_ds['val']
 })
 
 print(" THỐNG KÊ DATASET:")
@@ -265,55 +275,73 @@ print(f"Tokenizer test: '{test_text}' -> {test_encoded} -> '{test_decoded}'")
 # STEP 1: PRETRAINING (Optional)
 # ============================================
 ENABLE_PRETRAIN = os.getenv("ENABLE_PRETRAIN", "false").lower() == "true"
-PRETRAIN_DATA_PATH = os.getenv("PRETRAIN_DATA_PATH", "./data/pretrain")
+PRETRAIN_DATA_PATH = os.getenv("PRETRAIN_DATA_PATH", "../data")
 
 if ENABLE_PRETRAIN and os.path.exists(PRETRAIN_DATA_PATH):
     print("\n" + "="*80)
     print("STEP 1: PRETRAINING WITH MLM")
     print("="*80)
     
-    # Setup pretrain paths
-    imdb_file = os.path.join(PRETRAIN_DATA_PATH, "imdb_pretrain_p0.npy")
-    pdf_root = os.path.join(PRETRAIN_DATA_PATH, "pdfs")
-    ocr_root = os.path.join(PRETRAIN_DATA_PATH, "OCR")
     pretrain_output_dir = os.path.join(CKPT_PATH_DOCQA, "pretrain_output")
-    
-    # Check if pretrain data exists
-    if os.path.exists(imdb_file):
-        # Run pretraining
-        _, _, pretrained_model_path = pretrain_arctic_tilt(
-            imdb_file=imdb_file,
-            pdf_root=pdf_root,
-            ocr_root=ocr_root,
-            output_dir=pretrain_output_dir,
-            config=t5_config_docvqa,
-            tokenizer=tokenizer_docqa,
-            num_epochs=3,
-            batch_size=1,
-            learning_rate=1e-3
-        )
-        
-        print(f"\n Loading pretrained weights for fine-tuning...")
-        # Load pretrained model for fine-tuning
-        t5_config_docvqa.update(dict(
-            load_weights=False  # Disable auto-load for pretraining
-        ))
-        model = TiLTDocQATransformer(t5_config_docvqa)
-        model.t5_model.resize_token_embeddings(len(tokenizer_docqa))
-        
-        pretrained_state = torch.load(
-            os.path.join(pretrained_model_path, "pytorch_model.bin"),
-            map_location=device
-        )
-        model.load_state_dict(pretrained_state, strict=False)
-        print(f"   • Pretrained weights loaded successfully!")
-    else:
-        print(f"\n⚠️  Pretrain data not found at {imdb_file}")
-        print(f"   Skipping pretraining, will use randomly initialized model")
-        model = TiLTDocQATransformer(t5_config_docvqa)
-else:
-    print("\n Pretraining disabled, using randomly initialized model")
+    pretrain_config = get_pretrain_config()
+
+    # Check for existing checkpoints
+    resume_pretrain = None
+    if os.path.exists(pretrain_output_dir):
+        pretrain_checkpoints = [d for d in os.listdir(pretrain_output_dir)
+                                if d.startswith("checkpoint-")]
+        if pretrain_checkpoints:
+            latest_pretrain_checkpoint = max(pretrain_checkpoints,
+                                            key=lambda x: int(x.split("-")[-1]))
+            resume_pretrain = os.path.join(pretrain_output_dir, latest_pretrain_checkpoint)
+            print(f"🔄 Resuming pretraining from checkpoint: {resume_pretrain}")
+
+    # Run pretraining
+    _, _, pretrained_model_path = pretrain_arctic_tilt(
+        data_root=PRETRAIN_DATA_PATH,
+        output_dir=pretrain_output_dir,
+        # config=pretrain_config,
+        config=t5_config_docvqa,
+        tokenizer=tokenizer_docqa,
+        num_epochs=PRETRAIN_MAX_EPOCHS,
+        batch_size=PRETRAIN_BATCH_SIZE,
+        learning_rate=1e-3,
+        save_steps=100,
+        resume_from_checkpoint=resume_pretrain
+    )
+
+    print(f"\n Loading pretrained weights for fine-tuning...")
+    # Load pretrained model for fine-tuning
+    t5_config_docvqa.update(dict(
+        load_weights=False  # Disable auto-load for pretraining
+    ))
     model = TiLTDocQATransformer(t5_config_docvqa)
+    model.t5_model.resize_token_embeddings(len(tokenizer_docqa))
+    
+    pretrained_state = torch.load(
+        os.path.join(pretrained_model_path, "pytorch_model.bin"),
+        map_location=device
+    )
+    model.load_state_dict(pretrained_state, strict=False)
+    print(f"   • Pretrained weights loaded successfully!")
+else:
+    # print("\n Pretraining disabled, using randomly initialized model")
+    # model = TiLTDocQATransformer(t5_config_docvqa)
+    pretrained_model_path = os.path.join(CKPT_PATH_DOCQA, "pretrain_output/checkpoint-100")
+    tokenizer_docqa = AutoTokenizer.from_pretrained(pretrained_model_path)
+    print("\n Pretraining disabled, Loading pretrained weights from ckpt model")
+    t5_config_docvqa.update(dict(
+        load_weights=False  # Disable auto-load for pretraining
+    ))
+    model = TiLTDocQATransformer(t5_config_docvqa)
+    model.t5_model.resize_token_embeddings(len(tokenizer_docqa))
+    
+    pretrained_state = torch.load(
+        os.path.join(pretrained_model_path, "pytorch_model.bin"),
+        map_location=device
+    )
+    model.load_state_dict(pretrained_state, strict=False)
+    print(f"   • Pretrained weights loaded successfully!")
 
 # ============================================
 # STEP 2: FINE-TUNING ON DocVQA
