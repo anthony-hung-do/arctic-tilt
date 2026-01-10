@@ -174,21 +174,19 @@ class PretrainDataset(Dataset):
     """
     def __init__(
         self,
-        imdb_file,
-        pdf_root,
-        ocr_root,
+        data_root,
         tokenizer,
         max_length=512,
         mlm_probability=0.15,
         transform=None,
-        use_chunked_processing=True
+        use_chunked_processing=True,
+        max_tokens_limit=5000 
     ):
-        self.data = np.load(imdb_file, allow_pickle=True)[1:23000]  # Skip metadata at index 0
-        self.pdf_root = Path(pdf_root)
-        self.ocr_root = Path(ocr_root)
+        self.data_root = Path(data_root)
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.mlm_probability = mlm_probability
+        self.max_tokens_limit = max_tokens_limit
         self.transform = transform if transform else transforms.Compose([
             transforms.ToTensor(),
             transforms.Lambda(lambda x: 2 * x - 1)
@@ -196,40 +194,136 @@ class PretrainDataset(Dataset):
         self.use_chunked_processing = use_chunked_processing
 
         # Filter valid samples
-        self.valid_samples = self._filter_valid_samples()
-        print(f"✅ Loaded {len(self.valid_samples)}/{len(self.data)} valid pretrain samples")
+        # self.valid_samples = self._filter_valid_samples()
+        # print(f"✅ Loaded {len(self.valid_samples)}/{len(self.data)} valid pretrain samples")
+        self.samples_info = self._load_all_imdb_files()
+        print(f"✅ Loaded {len(self.samples_info)} valid pretrain samples from all files")
 
-    def _filter_valid_samples(self):
-        """Filter samples that have valid PDF and OCR data"""
-        valid = []
-        for idx, sample in enumerate(tqdm(self.data, desc="Filtering valid samples")):
-            if not isinstance(sample, dict):
+    def _load_all_imdb_files(self):
+        """Load and validate samples from all imdb_pretrain_p*.npy files"""
+        all_samples = []
+        
+        # Find all data_* directories
+        data_dirs = sorted([d for d in self.data_root.iterdir() 
+                           if d.is_dir() and d.name.startswith('data_')])
+        
+        if not data_dirs:
+            print("⚠️ No data_* directories found, trying legacy structure...")
+            # Fallback to legacy structure
+            data_dirs = [self.data_root]
+        
+        for data_dir in data_dirs:
+            print(f"\n📂 Processing directory: {data_dir}")
+            
+            # Find imdb files in this directory
+            imdb_files = sorted(data_dir.glob("imdb_pretrain_p*.npy"))
+            
+            if not imdb_files:
+                print(f"   ⚠️ No imdb files found in {data_dir}")
                 continue
-
+            
+            pdf_root = data_dir / "pdfs"
+            if not pdf_root.exists():
+                print(f"   ⚠️ PDF directory not found: {pdf_root}")
+                continue
+            
+            # Process each imdb file
+            for imdb_file in imdb_files:
+                print(f"   📄 Loading {imdb_file.name}...")
+                samples = self._load_and_validate_imdb(imdb_file, pdf_root)
+                all_samples.extend(samples)
+                print(f"      ✓ Added {len(samples)} valid samples")
+        
+        return all_samples
+    
+    def _load_and_validate_imdb(self, imdb_file, pdf_root):
+        """Load imdb file and validate samples"""
+        data = np.load(imdb_file, allow_pickle=True)
+        
+        # Skip metadata at index 0 if present
+        if len(data) > 0 and not isinstance(data[0], dict):
+            data = data[1:]
+        
+        valid_samples = []
+        skipped = 0
+        skipped_too_long = 0
+        
+        for idx, sample in enumerate(data):
+            if not isinstance(sample, dict):
+                skipped += 1
+                continue
+            
             image_id = sample.get('image_id')
             if not image_id:
+                skipped += 1
                 continue
-
+            
             # Check if PDF exists
-            pdf_path = self.pdf_root / image_id / f"{image_id}.pdf"
+            pdf_path = pdf_root / image_id / f"{image_id}.pdf"
             if not pdf_path.exists():
+                skipped += 1
                 continue
-
+            
             # Check if OCR tokens exist
             ocr_tokens = sample.get('ocr_tokens')
             if not ocr_tokens or len(ocr_tokens) == 0:
+                skipped += 1
                 continue
 
-            valid.append(idx)
+            if len(ocr_tokens) >= 1400:
+                text = " ".join(ocr_tokens)
+                num_tokens = len(self.tokenizer.encode(text, add_special_tokens=True))
+                
+                if num_tokens > self.max_tokens_limit:
+                    skipped_too_long += 1
+                    continue
+            
+            # Store sample info with paths
+            valid_samples.append({
+                'sample': sample,
+                'pdf_root': pdf_root,
+                'image_id': image_id
+            })
+        
+        if skipped > 0:
+            print(f"      ⚠️ Skipped {skipped} invalid/missing samples")
+        if skipped_too_long > 0:
+            print(f"      ⚠️ Skipped {skipped_too_long} samples exceeding {self.max_tokens_limit} tokens")
+        
+        return valid_samples
+    
+    # def _filter_valid_samples(self):
+    #     """Filter samples that have valid PDF and OCR data"""
+    #     valid = []
+    #     for idx, sample in enumerate(tqdm(self.data, desc="Filtering valid samples")):
+    #         if not isinstance(sample, dict):
+    #             continue
 
-        return valid
+    #         image_id = sample.get('image_id')
+    #         if not image_id:
+    #             continue
+
+    #         # Check if PDF exists
+    #         pdf_path = self.pdf_root / image_id / f"{image_id}.pdf"
+    #         if not pdf_path.exists():
+    #             continue
+
+    #         # Check if OCR tokens exist
+    #         ocr_tokens = sample.get('ocr_tokens')
+    #         if not ocr_tokens or len(ocr_tokens) == 0:
+    #             continue
+
+    #         valid.append(idx)
+
+    #     return valid
 
     def __len__(self):
-        return len(self.valid_samples)
+        # return len(self.valid_samples)
+        return len(self.samples_info)
 
-    def _load_page_image(self, image_id, page_num=0):
+    def _load_page_image(self, pdf_root, image_id, page_num=0):
         """Load PDF page as image"""
-        pdf_path = self.pdf_root / image_id / f"{image_id}.pdf"
+        pdf_path = pdf_root / image_id / f"{image_id}.pdf"
         try:
             images = pdf2image.convert_from_path(
                 pdf_path,
@@ -237,7 +331,18 @@ class PretrainDataset(Dataset):
                 last_page=page_num + 1,
                 dpi=150
             )
-            return images[0] if images else None
+
+            if not images:
+                return None
+            
+            # Convert sang PIL Image và đóng ngay
+            image = images[0].copy()
+            
+            # Giải phóng danh sách images
+            del images
+            
+            return image
+            
         except Exception as e:
             print(f"⚠️ Error loading PDF {pdf_path}: {e}")
             return None
@@ -299,17 +404,18 @@ class PretrainDataset(Dataset):
         ]
 
     def __getitem__(self, idx):
-        real_idx = self.valid_samples[idx]
-        sample = self.data[real_idx]
+        sample_info = self.samples_info[idx]
+        sample = sample_info['sample']
+        pdf_root = sample_info['pdf_root']
+        image_id = sample_info['image_id']
 
         # Get data
-        image_id = sample['image_id']
         ocr_tokens = sample['ocr_tokens']
         ocr_boxes = sample['ocr_normalized_boxes']
         page_num = sample.get('ucsf_document_page', 0)
 
         # Load image
-        image = self._load_page_image(image_id, page_num)
+        image = self._load_page_image(pdf_root, image_id, page_num)
         if image is None:
             # Return dummy data if image fails to load
             return self._get_dummy_sample()
@@ -318,6 +424,9 @@ class PretrainDataset(Dataset):
         original_width, original_height = image.size
         resized_image = image.resize((512, 384))
         img_tensor = self.transform(resized_image)
+
+        del image
+        del resized_image
 
         # Create text input (no question, just OCR text for pretraining)
         text = " ".join(ocr_tokens)
@@ -398,7 +507,7 @@ class PretrainDataset(Dataset):
             'bboxes': torch.tensor(bbox_array, dtype=torch.long),
             'pixel_values': img_tensor,
             'original_length': actual_length,
-            'doc_id': image_id
+            'doc_id': image_id,
         }
 
     def _get_dummy_sample(self):
@@ -411,6 +520,6 @@ class PretrainDataset(Dataset):
             'bboxes': torch.zeros(dummy_length, 4, dtype=torch.long),
             'pixel_values': torch.zeros(3, 384, 512),
             'original_length': dummy_length,
-            'doc_id': 'dummy'
+            'doc_id': 'dummy',
         }
 
