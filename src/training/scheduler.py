@@ -12,6 +12,10 @@ def get_arctic_tilt_scheduler(optimizer, num_training_steps):
     linear_steps = max(1, int(0.89 * num_training_steps))
     cosine_steps = num_training_steps - warmup_steps - linear_steps
 
+    if cosine_steps < 1:
+        cosine_steps = 1
+        linear_steps -= 1
+
     # 1. Warmup: Constant 1e-3
     warmup_scheduler = ConstantLR(
         optimizer,
