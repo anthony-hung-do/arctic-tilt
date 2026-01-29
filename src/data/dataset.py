@@ -270,13 +270,18 @@ class PretrainDataset(Dataset):
                 skipped += 1
                 continue
 
-            if len(ocr_tokens) >= 1400:
+            # if len(ocr_tokens) >= 1400:
+            if len(ocr_tokens) >= 800:
                 text = " ".join(ocr_tokens)
                 num_tokens = len(self.tokenizer.encode(text, add_special_tokens=True))
                 
                 if num_tokens > self.max_tokens_limit:
                     skipped_too_long += 1
                     continue
+            # test
+            # if num_tokens < 3400:
+            #     skipped_too_long += 1
+            #     continue
             
             # Store sample info with paths
             valid_samples.append({
