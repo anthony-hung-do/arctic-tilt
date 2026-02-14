@@ -95,7 +95,6 @@ def pretrain_arctic_tilt(
         max_length=config.model_max_length,
         mlm_probability=0.15,
         use_chunked_processing=config.use_chunked_processing,
-        # max_tokens_limit=5000
         max_tokens_limit=3500
     )
     
@@ -241,32 +240,15 @@ def pretrain_arctic_tilt(
     
     return trainer, model, final_model_dir
 
-hf_ds = load_dataset("nielsr/docvqa_1200_examples")
+# hf_ds = load_dataset("nielsr/docvqa_1200_examples")
 
-train_split = hf_ds['train'].train_test_split(test_size=0.1, seed=42)
-
-docvqa_dataset = DatasetDict({
-    'train': train_split['train'],
-    'validation': train_split['test'],
-    'test': hf_ds['test']
-    # 'test': hf_ds['val']
-})
-
-print(" THỐNG KÊ DATASET:")
-print(f"   • Train: {len(docvqa_dataset['train'])} samples")
-print(f"   • Validation: {len(docvqa_dataset['validation'])} samples")
-print(f"   • Test: {len(docvqa_dataset['test'])} samples")
-print(f"   • Tổng: {len(docvqa_dataset['train']) + len(docvqa_dataset['validation']) + len(docvqa_dataset['test'])} samples")
-
-# train_ds = load_dataset("hxlinh/SP-DocVQA", split="train").shuffle(seed=42).select(range(6000))
-# val_ds = load_dataset("hxlinh/SP-DocVQA", split="val").shuffle(seed=42).select(range(1200))
-# test_ds = load_dataset("hxlinh/SP-DocVQA", split="val").shuffle(seed=42).select(range(1200,2400))
-# test_ds_2 = load_dataset("nielsr/docvqa_1200_examples", split="test")
+# train_split = hf_ds['train'].train_test_split(test_size=0.1, seed=42)
 
 # docvqa_dataset = DatasetDict({
-#     'train': train_ds,
-#     'validation': val_ds,
-#     'test': test_ds
+#     'train': train_split['train'],
+#     'validation': train_split['test'],
+#     'test': hf_ds['test']
+#     # 'test': hf_ds['val']
 # })
 
 # print(" THỐNG KÊ DATASET:")
@@ -274,6 +256,23 @@ print(f"   • Tổng: {len(docvqa_dataset['train']) + len(docvqa_dataset['valid
 # print(f"   • Validation: {len(docvqa_dataset['validation'])} samples")
 # print(f"   • Test: {len(docvqa_dataset['test'])} samples")
 # print(f"   • Tổng: {len(docvqa_dataset['train']) + len(docvqa_dataset['validation']) + len(docvqa_dataset['test'])} samples")
+
+train_ds = load_dataset("hxlinh/SP-DocVQA", split="train").shuffle(seed=42).select(range(6000))
+val_ds = load_dataset("hxlinh/SP-DocVQA", split="val").shuffle(seed=42).select(range(1200))
+test_ds = load_dataset("hxlinh/SP-DocVQA", split="val").shuffle(seed=42).select(range(1200,2400))
+test_ds_2 = load_dataset("nielsr/docvqa_1200_examples", split="test")
+
+docvqa_dataset = DatasetDict({
+    'train': train_ds,
+    'validation': val_ds,
+    'test': test_ds
+})
+
+print(" THỐNG KÊ DATASET:")
+print(f"   • Train: {len(docvqa_dataset['train'])} samples")
+print(f"   • Validation: {len(docvqa_dataset['validation'])} samples")
+print(f"   • Test: {len(docvqa_dataset['test'])} samples")
+print(f"   • Tổng: {len(docvqa_dataset['train']) + len(docvqa_dataset['validation']) + len(docvqa_dataset['test'])} samples")
 
 t5_config_docvqa = get_t5_config()
 
@@ -755,98 +754,98 @@ print(f"All results saved to: {CKPT_PATH_DOCQA}")
 
 # -------------------------------------------
 
-# print("\n Running final evaluation on test set 2...")
+print("\n Running final evaluation on test set 2...")
 
-# test_ds_docqa_2 = DocVQADataset(
-#     test_ds_2,
-#     tokenizer=tokenizer_docqa,
-#     max_source_length=t5_config_docvqa.model_max_length,
-#     max_target_length=t5_config_docvqa.max_target_length,
-#     transform=transform_docqa,
-#     language='en',
-#     use_chunked_processing=t5_config_docvqa.use_chunked_processing
-# )
+test_ds_docqa_2 = DocVQADataset(
+    test_ds_2,
+    tokenizer=tokenizer_docqa,
+    max_source_length=t5_config_docvqa.model_max_length,
+    max_target_length=t5_config_docvqa.max_target_length,
+    transform=transform_docqa,
+    language='en',
+    use_chunked_processing=t5_config_docvqa.use_chunked_processing
+)
 
-# best_model_path = os.path.join(CKPT_PATH_DOCQA, "final_model")
+best_model_path = os.path.join(CKPT_PATH_DOCQA, "final_model")
 
-# if not os.path.exists(best_model_path):
-#     # Fallback: tìm checkpoint tốt nhất
-#     checkpoints = [d for d in os.listdir(CKPT_PATH_DOCQA)
-#                   if d.startswith("checkpoint-")]
-#     if checkpoints:
-#         # Trainer tự động lưu best checkpoint
-#         best_model_path = os.path.join(CKPT_PATH_DOCQA,
-#                                        trainer.state.best_model_checkpoint.split('/')[-1])
-#         print(f" Loading best checkpoint: {best_model_path}")
+if not os.path.exists(best_model_path):
+    # Fallback: tìm checkpoint tốt nhất
+    checkpoints = [d for d in os.listdir(CKPT_PATH_DOCQA)
+                  if d.startswith("checkpoint-")]
+    if checkpoints:
+        # Trainer tự động lưu best checkpoint
+        best_model_path = os.path.join(CKPT_PATH_DOCQA,
+                                       trainer.state.best_model_checkpoint.split('/')[-1])
+        print(f" Loading best checkpoint: {best_model_path}")
 
-# print(f" Loading model from: {best_model_path}")
-# model = TiLTDocQATransformer(t5_config_docvqa)
-# model.load_state_dict(torch.load(os.path.join(best_model_path, "pytorch_model.bin")))
+print(f" Loading model from: {best_model_path}")
+model = TiLTDocQATransformer(t5_config_docvqa)
+model.load_state_dict(torch.load(os.path.join(best_model_path, "pytorch_model.bin")))
 
-# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# model.to(device)
-# model.eval()
-# all_predictions = []
-# all_references = []
-# all_questions = []
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model.to(device)
+model.eval()
+all_predictions = []
+all_references = []
+all_questions = []
 
-# test_dataloader = DataLoader(
-#     test_ds_docqa_2,
-#     batch_size=1,
-#     shuffle=False,
-#     collate_fn=collate_fn_docqa,
-#     num_workers=8
-# )
+test_dataloader = DataLoader(
+    test_ds_docqa_2,
+    batch_size=1,
+    shuffle=False,
+    collate_fn=collate_fn_docqa,
+    num_workers=8
+)
 
-# with torch.no_grad():
-#     for batch in tqdm(test_dataloader, desc="Testing"):
-#         batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v
-#                 for k, v in batch.items()}
+with torch.no_grad():
+    for batch in tqdm(test_dataloader, desc="Testing"):
+        batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v
+                for k, v in batch.items()}
 
-#         generated_ids = model.generate(
-#             batch,
-#             max_length=128,
-#             num_beams=4,
-#             early_stopping=True
-#         )
+        generated_ids = model.generate(
+            batch,
+            max_length=128,
+            num_beams=4,
+            early_stopping=True
+        )
 
-#         predictions = tokenizer_docqa.batch_decode(
-#             generated_ids,
-#             skip_special_tokens=True
-#         )
+        predictions = tokenizer_docqa.batch_decode(
+            generated_ids,
+            skip_special_tokens=True
+        )
 
-#         all_predictions.extend(predictions)
-#         all_references.extend([[answer] for answer in batch['answers']])
-#         all_questions.extend(batch['questions'])
+        all_predictions.extend(predictions)
+        all_references.extend([[answer] for answer in batch['answers']])
+        all_questions.extend(batch['questions'])
 
-# # Compute final metrics
-# final_metrics = compute_docqa_metrics(all_predictions, all_references)
+# Compute final metrics
+final_metrics = compute_docqa_metrics(all_predictions, all_references)
 
-# print("\n" + "="*60)
-# print(" FINAL TEST RESULTS:")
-# print(f"   • Exact Match: {final_metrics['exact_match']:.2f}%")
-# print(f"   • F1 Score: {final_metrics['f1']:.2f}%")
-# print(f"   • ANLS: {final_metrics['anls']:.4f}")
-# print("="*60)
+print("\n" + "="*60)
+print(" FINAL TEST RESULTS:")
+print(f"   • Exact Match: {final_metrics['exact_match']:.2f}%")
+print(f"   • F1 Score: {final_metrics['f1']:.2f}%")
+print(f"   • ANLS: {final_metrics['anls']:.4f}")
+print("="*60)
 
-# print(f"\n SAMPLE TEST PREDICTIONS:")
-# print("="*80)
-# num_samples = min(10, len(all_predictions))
-# for i in range(num_samples):
-#     print(f"Sample {i+1}:")
-#     print(f"  Question: {all_questions[i]}")
-#     print(f"  Ground Truth: {all_references[i][0]}")
-#     print(f"  Prediction: {all_predictions[i]}")
-#     print("-"*80)
+print(f"\n SAMPLE TEST PREDICTIONS:")
+print("="*80)
+num_samples = min(10, len(all_predictions))
+for i in range(num_samples):
+    print(f"Sample {i+1}:")
+    print(f"  Question: {all_questions[i]}")
+    print(f"  Ground Truth: {all_references[i][0]}")
+    print(f"  Prediction: {all_predictions[i]}")
+    print("-"*80)
 
-# # Log to wandb
-# # if training_args.report_to and "wandb" in training_args.report_to:
-# #     import wandb
-# #     wandb.log({
-# #         "test_exact_match": final_metrics['exact_match'],
-# #         "test_f1": final_metrics['f1'],
-# #         "test_anls": final_metrics['anls']
-# #     })
-# #     wandb.finish()
+# Log to wandb
+# if training_args.report_to and "wandb" in training_args.report_to:
+#     import wandb
+#     wandb.log({
+#         "test_exact_match": final_metrics['exact_match'],
+#         "test_f1": final_metrics['f1'],
+#         "test_anls": final_metrics['anls']
+#     })
+#     wandb.finish()
 
-# print("\n🎉 All done!")
+print("\n🎉 All done!")

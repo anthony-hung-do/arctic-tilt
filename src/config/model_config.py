@@ -14,7 +14,7 @@ SPATIAL_SCALE = 48 / 384
 OUTPUT_SIZE = (3, 3)
 
 # Training parameters
-DROPOUT_RATE = 0.1
+DROPOUT_RATE = 0.2
 LOAD_WEIGHTS = True
 MODEL_MAX_LENGTH = 150000
 PRETRAIN_MAX_LENGTH = 8000
@@ -31,8 +31,7 @@ PREFIX_LENGTH = 8
 PRETRAIN_MAX_EPOCHS = 1
 PRETRAIN_BATCH_SIZE = 2
 PRETRAIN_GRAD_ACC_STEPS = 64
-    
-MAX_EPOCHS = 10
+MAX_EPOCHS = 15
 BATCH_SIZE = 4
 GRAD_ACC_STEPS = 2
 
@@ -61,6 +60,12 @@ def get_t5_config():
         use_chunked_processing=USE_CHUNKED_PROCESSING,
         prefix_length=PREFIX_LENGTH,
         task_type="document_qa",
+        # use_case_augmentation = False,
+        # randomly discard chunks
+        enable_chunk_discard = True,
+        chunk_discard_ratio = 0.6,
+        # discard chunks v2
+        enable_chunk_discard_v2 = True,
     ))
     return config
 

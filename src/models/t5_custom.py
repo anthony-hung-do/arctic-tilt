@@ -8,13 +8,115 @@ import math
 from typing import Optional, Tuple, List
 import torch
 import torch.nn as nn
+import random
 
 class ChunkedProcessor:
-    def __init__(self, core_chunk_length: int = 1024, chunk_overlap: int = 0, debug: bool = False):
+    def __init__(self, core_chunk_length: int = 1024, chunk_overlap: int = 0, debug: bool = False, enable_chunk_discard: bool = False, chunk_discard_ratio: float = 0.6, enable_chunk_discard_v2: bool = False):
         self.core_chunk_length = core_chunk_length
         self.chunk_overlap = chunk_overlap
         self.debug = debug
         self.sample_count = 0
+
+        # randomly discard chunks
+        self.enable_chunk_discard = enable_chunk_discard
+        self.chunk_discard_ratio = chunk_discard_ratio
+
+        # discard chunks v2
+        self.enable_chunk_discard_v2 = enable_chunk_discard_v2
+
+    def should_discard_sample(self, num_chunks: int, training: bool = True) -> bool:
+        """
+        NEW METHOD: Determine if a sample with <= 2 chunks should be discarded entirely.
+
+        Args:
+            num_chunks: Number of chunks in the sample
+            training: Only discard during training
+
+        Returns:
+            True if sample should be discarded, False otherwise
+        """
+        if not training or not self.enable_chunk_discard_v2:
+            return False
+
+        if num_chunks <= 2:
+            # Randomly discard with chunk_discard_ratio probability
+            should_discard = random.random() < self.chunk_discard_ratio
+
+            if self.debug and self.sample_count < 10:
+                if should_discard:
+                    print(f"\n     SAMPLE DISCARD (V2 - TRAINING):")
+                    print(f"       Sample has {num_chunks} chunks (<= 2)")
+                    print(f"       Discard probability: {self.chunk_discard_ratio:.1%}")
+
+            return should_discard
+
+        return False
+
+    def apply_chunk_discard(self,
+                          chunked_input_ids: List[torch.Tensor],
+                          chunked_attention_masks: List[torch.Tensor],
+                          chunked_embeds: List[torch.Tensor],
+                          chunk_info: List[int],
+                          chunked_vision_embeds: List[torch.Tensor] = None,
+                          training: bool = True) -> Tuple:
+        """
+        Randomly discard chunks during training for documents > 2 chunks.
+        The first chunk is always preserved to provide essential context.
+
+        Args:
+            training: Only discard when training=True (NOT during inference)
+
+        Returns:
+            Filtered chunks with some randomly discarded (or original if conditions not met)
+        """
+        num_chunks = len(chunked_embeds)
+
+        # SKIP CONDITIONS:
+        # 1. Not in training mode (inference/evaluation)
+        # 2. Feature disabled
+        # 3. Too few chunks (need > 2 chunks, i.e., >= 3)
+        if (not training or
+            not self.enable_chunk_discard or
+            num_chunks < 3):
+
+            if self.debug and self.sample_count < 3:
+                reason = "evaluation mode" if not training else \
+                        f"too few chunks ({num_chunks} < 3)"
+                print(f"\n  SKIP CHUNK DISCARD ({reason})")
+
+            return (chunked_input_ids, chunked_attention_masks,
+                  chunked_embeds, chunk_info, chunked_vision_embeds)
+
+        # Always keep first chunk (index 0)
+        chunks_to_consider = list(range(1, num_chunks))
+        num_to_discard = int(len(chunks_to_consider) * self.chunk_discard_ratio)
+
+        # Randomly select chunks to discard (from chunks 1+)
+        chunks_to_discard = set(random.sample(
+            chunks_to_consider,
+            min(num_to_discard, max(0, len(chunks_to_consider) - 1))
+        ))
+
+        # Indices to keep: always 0 + non-discarded chunks
+        keep_indices = [0] + [i for i in chunks_to_consider
+                              if i not in chunks_to_discard]
+
+        if self.debug and self.sample_count < 800:
+            print(f"\n     RANDOM CHUNK DISCARD (TRAINING):")
+            print(f"       Total chunks: {num_chunks}")
+            print(f"       Discard ratio: {self.chunk_discard_ratio:.1%}")
+            print(f"       Chunks discarded: {len(chunks_to_discard)}")
+            print(f"       Chunks kept: {len(keep_indices)} {keep_indices}")
+
+        # Filter all chunk lists
+        filtered_input_ids = [chunked_input_ids[i] for i in keep_indices] if chunked_input_ids else None
+        filtered_masks = [chunked_attention_masks[i] for i in keep_indices]
+        filtered_embeds = [chunked_embeds[i] for i in keep_indices]
+        filtered_info = [chunk_info[i] for i in keep_indices]
+        filtered_vision = [chunked_vision_embeds[i] for i in keep_indices] if chunked_vision_embeds else None
+
+        return (filtered_input_ids, filtered_masks, filtered_embeds,
+                filtered_info, filtered_vision)
 
     def create_chunks(self,
                 input_ids: torch.Tensor = None,
@@ -210,6 +312,7 @@ class ChunkedProcessor:
                         inputs_embeds: torch.Tensor = None,
                         vision_embeddings: torch.Tensor = None,
                         prefix_length: int = 1,
+                        training: bool = False,
                         **encoder_kwargs) -> torch.Tensor:
         """
         Process long sequence using chunked processing with ALIGNED text and vision chunks.
@@ -262,6 +365,24 @@ class ChunkedProcessor:
 
                 if self.debug and self.sample_count < 5:
                     print(f"       Vision Chunk {chunk_idx}: [{chunk_start_pos}:{chunk_end_pos}] + prefix({prefix_length}) = {vision_chunk.shape[1]} tokens")
+
+        # discard chunks v2
+        num_chunks = len(chunked_text_embeds)
+        if self.should_discard_sample(num_chunks, training):
+            if self.debug and self.sample_count < 10:
+                print(f"     Skipping this sample (V2 discard)")
+            self.sample_count += 1
+            return None
+
+        (chunked_input_ids, chunked_masks, chunked_text_embeds,
+         chunk_info, chunked_vision_embeds) = self.apply_chunk_discard(
+            chunked_input_ids=chunked_input_ids,
+            chunked_attention_masks=chunked_masks,
+            chunked_embeds=chunked_text_embeds,
+            chunk_info=chunk_info,
+            chunked_vision_embeds=chunked_vision_embeds,
+            training=training
+        )
 
         # Process each chunk
         chunk_outputs = []
@@ -1104,7 +1225,10 @@ class T5Stack(t5.modeling_t5.T5Stack):
             self.chunked_processor = ChunkedProcessor(
                 core_chunk_length=getattr(config, 'core_chunk_length', 1024),
                 chunk_overlap=getattr(config, 'chunk_overlap', 0),
-                debug = False
+                debug = False,
+                enable_chunk_discard = getattr(config, 'enable_chunk_discard', True),
+                chunk_discard_ratio = getattr(config, 'chunk_discard_ratio', 0.6),
+                enable_chunk_discard_v2 = getattr(config, 'enable_chunk_discard_v2', False), # discard chunks v2
             )
         else:
             self.chunked_processor = None
@@ -1125,6 +1249,7 @@ class T5Stack(t5.modeling_t5.T5Stack):
         return_dict=None,
         vision_embeddings=None,
         cache_position=None,
+        training = None,
     ):
         use_cache = False
         past_key_values = None
@@ -1146,6 +1271,7 @@ class T5Stack(t5.modeling_t5.T5Stack):
                 output_hidden_states=output_hidden_states,
                 return_dict=return_dict,
                 vision_embeddings=vision_embeddings,
+                training = training,
             )
         else:
             # Use standard processing
@@ -1176,6 +1302,7 @@ class T5Stack(t5.modeling_t5.T5Stack):
         output_hidden_states=None,
         return_dict=None,
         vision_embeddings=None,
+        training = None,
     ):
         """
         Forward pass with chunked processing using Arctic-TILT approach.
@@ -1222,7 +1349,11 @@ class T5Stack(t5.modeling_t5.T5Stack):
             output_hidden_states=output_hidden_states,
             return_dict=True,
             vision_embeddings=vision_embeddings,
+            training = training
         )
+
+        if combined_output is None:
+            return None
 
         # Return in appropriate format
         if return_dict:
@@ -1489,7 +1620,8 @@ class T5ForConditionalGeneration(t5.modeling_t5.T5ForConditionalGeneration):
                     'inputs_embeds': inputs_embeds,
                     'attention_mask': attention_mask,
                     'vision_embeddings': vision_embeddings,
-                    'return_dict': True
+                    'return_dict': True,
+                    'training': False,
                 }
                 encoder_outputs = self.encoder(**encoder_kwargs)
                 kwargs['encoder_outputs'] = encoder_outputs
@@ -1537,8 +1669,32 @@ class T5ForConditionalGeneration(t5.modeling_t5.T5ForConditionalGeneration):
                 'output_hidden_states': output_hidden_states,
                 'return_dict': True,
                 'vision_embeddings': vision_embeddings,
+                'training': True,
             }
             encoder_outputs = self.encoder(**encoder_kwargs)
+
+            # discard chunks v2
+            if encoder_outputs is None:
+                device = labels.device if labels is not None else next(self.parameters()).device
+
+                # loss = torch.zeros(1, device=device, dtype=torch.float32, requires_grad=True)
+
+                dummy_param = next(self.parameters())
+                loss = 0.0 * dummy_param.sum()
+
+                # Return minimal valid output
+                from transformers.modeling_outputs import Seq2SeqLMOutput
+                return Seq2SeqLMOutput(
+                    loss=loss,
+                    logits=None,
+                    past_key_values=None,
+                    decoder_hidden_states=None,
+                    decoder_attentions=None,
+                    cross_attentions=None,
+                    encoder_last_hidden_state=None,
+                    encoder_hidden_states=None,
+                    encoder_attentions=None,
+                )
 
             input_ids = None
             inputs_embeds = None
