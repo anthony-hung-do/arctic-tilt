@@ -9,10 +9,14 @@ from typing import Optional, Tuple, List
 import torch
 import torch.nn as nn
 import random
+from config.model_config import USE_FP8
 
 class ChunkedProcessor:
-    def __init__(self, core_chunk_length: int = 1024, chunk_overlap: int = 0, debug: bool = False, enable_chunk_discard: bool = False, chunk_discard_ratio: float = 0.6, enable_chunk_discard_v2: bool = False):
-        self.core_chunk_length = core_chunk_length
+    def __init__(self, core_chunk_length: int = 1024, chunk_overlap: int = 0, debug: bool = False, enable_chunk_discard: bool = False, chunk_discard_ratio: float = 0.6, enable_chunk_discard_v2: bool = False, pad_to_multiple_of: int = 16):
+        if pad_to_multiple_of > 1:
+            self.core_chunk_length = ((core_chunk_length + pad_to_multiple_of - 1) // pad_to_multiple_of) * pad_to_multiple_of
+        else:
+            self.core_chunk_length = core_chunk_length
         self.chunk_overlap = chunk_overlap
         self.debug = debug
         self.sample_count = 0
@@ -1085,6 +1089,7 @@ class T5Block(nn.Module):
             self.layer_index < self.total_layers - 1 and  # Not last layer
             self.training and  # training
             past_key_value is None
+            and not USE_FP8  # FP8 không hỗ trợ checkpointing
         )
 
         if use_checkpointing:
@@ -1214,7 +1219,12 @@ class T5Block(nn.Module):
 class T5Stack(t5.modeling_t5.T5Stack):
     def __init__(self, config, embed_tokens=None):
         '''Arctic-TILT implementation with custom T5Block and chunked processing'''
-        super().__init__(config=config, embed_tokens=embed_tokens)
+        # super().__init__(config=config, embed_tokens=embed_tokens)
+        super().__init__(config=config)
+
+        if embed_tokens is not None:
+            self.embed_tokens = embed_tokens
+            
         self.block = nn.ModuleList(
             [T5Block(config, has_relative_attention_bias=bool(i == 0), layer_index=i)
              for i in range(config.num_layers)]
@@ -1225,6 +1235,7 @@ class T5Stack(t5.modeling_t5.T5Stack):
             self.chunked_processor = ChunkedProcessor(
                 core_chunk_length=getattr(config, 'core_chunk_length', 1024),
                 chunk_overlap=getattr(config, 'chunk_overlap', 0),
+                pad_to_multiple_of=getattr(config, 'pad_to_multiple_of', 16),
                 debug = False,
                 enable_chunk_discard = getattr(config, 'enable_chunk_discard', True),
                 chunk_discard_ratio = getattr(config, 'chunk_discard_ratio', 0.6),

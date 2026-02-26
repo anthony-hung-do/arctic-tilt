@@ -1,11 +1,12 @@
 import torch
 
 class DocVQACollateFn(object):
-    def __init__(self, tokenizer, max_source_length=512, max_target_length=128, use_chunked_processing=True):
+    def __init__(self, tokenizer, max_source_length=512, max_target_length=128, use_chunked_processing=True, pad_to_multiple_of=16):
         self.tokenizer = tokenizer
         self.max_source_length = max_source_length
         self.max_target_length = max_target_length
         self.use_chunked_processing = use_chunked_processing
+        self.pad_to_multiple_of = pad_to_multiple_of
 
     def __call__(self, batch):
         if self.use_chunked_processing:
@@ -20,6 +21,9 @@ class DocVQACollateFn(object):
 
         # Tìm max length trong batch
         max_length = max(item['original_length'] for item in batch)
+
+        if self.pad_to_multiple_of > 1:
+            max_length = ((max_length + self.pad_to_multiple_of - 1) // self.pad_to_multiple_of) * self.pad_to_multiple_of
 
         batch_dict = {}
 
@@ -93,9 +97,10 @@ class DocVQACollateFn(object):
 class PretrainCollateFn:
     """Collate function for pretrain dataloader"""
     # def __init__(self, tokenizer, use_chunked_processing=True, log_file='logs/pretrain_samples.log', start_logging_step=117):
-    def __init__(self, tokenizer, use_chunked_processing=True):
+    def __init__(self, tokenizer, use_chunked_processing=True, pad_to_multiple_of=16):
         self.tokenizer = tokenizer
         self.use_chunked_processing = use_chunked_processing
+        self.pad_to_multiple_of = pad_to_multiple_of
         # self.log_file = log_file
         # self.start_logging_step = start_logging_step
         # self.current_step = 0
@@ -141,6 +146,9 @@ class PretrainCollateFn:
     def _collate_variable_length(self, batch):
         """Handle variable length sequences"""
         max_length = max(item['original_length'] for item in batch)
+
+        if self.pad_to_multiple_of > 1:
+            max_length = ((max_length + self.pad_to_multiple_of - 1) // self.pad_to_multiple_of) * self.pad_to_multiple_of
 
         batch_dict = {}
         input_ids_list = []
