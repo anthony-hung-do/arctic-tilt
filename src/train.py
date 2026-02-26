@@ -19,7 +19,7 @@ import random
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 from config.model_config import (
     MODEL_NAME, CKPT_PATH_DOCQA, BATCH_SIZE, GRAD_ACC_STEPS, PRETRAIN_MAX_EPOCHS, PRETRAIN_BATCH_SIZE, PRETRAIN_GRAD_ACC_STEPS,
-    get_t5_config, get_pretrain_config
+    get_t5_config, get_pretrain_config, PAD_TO_MULTIPLE_OF, USE_FP8
 )
 from utils.auth import setup_authentication
 from models.tilt_model import TiLTDocQATransformer
@@ -29,6 +29,7 @@ from training.optimizer import create_optimizer
 from training.scheduler import get_arctic_tilt_scheduler
 from training.callbacks import ValidationMetricsCallback, ClearCacheCallback, MemoryMonitorCallback
 from metrics import compute_docqa_metrics
+from training.custom_trainer import CustomTrainer
 
 setup_authentication()
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -95,13 +96,15 @@ def pretrain_arctic_tilt(
         max_length=config.model_max_length,
         mlm_probability=0.15,
         use_chunked_processing=config.use_chunked_processing,
+        # max_tokens_limit=5000
         max_tokens_limit=3500
     )
     
     # Create data collator
     collate_fn = PretrainCollateFn(
         tokenizer=tokenizer,
-        use_chunked_processing=config.use_chunked_processing
+        use_chunked_processing=config.use_chunked_processing,
+        pad_to_multiple_of=PAD_TO_MULTIPLE_OF
     )
     
     # Initialize model
@@ -144,20 +147,20 @@ def pretrain_arctic_tilt(
     # Training arguments
     training_args = TrainingArguments(
         output_dir=output_dir,
-        overwrite_output_dir=False,
+        # overwrite_output_dir=False,
         
         num_train_epochs=num_epochs,
         # max_steps=11698,
         per_device_train_batch_size=batch_size,
         gradient_accumulation_steps=PRETRAIN_GRAD_ACC_STEPS,
-        gradient_checkpointing=True,
+        gradient_checkpointing=False if USE_FP8 else True,
         max_grad_norm=1.0,
-        gradient_checkpointing_kwargs={"use_reentrant": False},
+        gradient_checkpointing_kwargs={"use_reentrant": False} if not USE_FP8 else None,
         
         learning_rate=learning_rate,
         weight_decay=1e-5,
         
-        bf16=True,
+        # bf16=True,
         # fp16=True,
 
         logging_dir=os.path.join(output_dir, "logs"),
@@ -173,7 +176,7 @@ def pretrain_arctic_tilt(
         dataloader_pin_memory=True,
         
         remove_unused_columns=False,
-        save_safetensors=False,
+        # save_safetensors=False,
         
         report_to=["wandb"],
         
@@ -194,7 +197,8 @@ def pretrain_arctic_tilt(
     clear_cache_callback = ClearCacheCallback()
     
     # Initialize Trainer
-    trainer = Trainer(
+    # trainer = Trainer(
+    trainer = CustomTrainer(
         model=model,
         args=training_args,
         train_dataset=pretrain_dataset,
@@ -240,32 +244,15 @@ def pretrain_arctic_tilt(
     
     return trainer, model, final_model_dir
 
-# hf_ds = load_dataset("nielsr/docvqa_1200_examples")
+hf_ds = load_dataset("nielsr/docvqa_1200_examples")
 
-# train_split = hf_ds['train'].train_test_split(test_size=0.1, seed=42)
-
-# docvqa_dataset = DatasetDict({
-#     'train': train_split['train'],
-#     'validation': train_split['test'],
-#     'test': hf_ds['test']
-#     # 'test': hf_ds['val']
-# })
-
-# print(" THỐNG KÊ DATASET:")
-# print(f"   • Train: {len(docvqa_dataset['train'])} samples")
-# print(f"   • Validation: {len(docvqa_dataset['validation'])} samples")
-# print(f"   • Test: {len(docvqa_dataset['test'])} samples")
-# print(f"   • Tổng: {len(docvqa_dataset['train']) + len(docvqa_dataset['validation']) + len(docvqa_dataset['test'])} samples")
-
-train_ds = load_dataset("hxlinh/SP-DocVQA", split="train").shuffle(seed=42).select(range(6000))
-val_ds = load_dataset("hxlinh/SP-DocVQA", split="val").shuffle(seed=42).select(range(1200))
-test_ds = load_dataset("hxlinh/SP-DocVQA", split="val").shuffle(seed=42).select(range(1200,2400))
-test_ds_2 = load_dataset("nielsr/docvqa_1200_examples", split="test")
+train_split = hf_ds['train'].train_test_split(test_size=0.1, seed=42)
 
 docvqa_dataset = DatasetDict({
-    'train': train_ds,
-    'validation': val_ds,
-    'test': test_ds
+    'train': train_split['train'],
+    'validation': train_split['test'],
+    'test': hf_ds['test']
+    # 'test': hf_ds['val']
 })
 
 print(" THỐNG KÊ DATASET:")
@@ -273,6 +260,23 @@ print(f"   • Train: {len(docvqa_dataset['train'])} samples")
 print(f"   • Validation: {len(docvqa_dataset['validation'])} samples")
 print(f"   • Test: {len(docvqa_dataset['test'])} samples")
 print(f"   • Tổng: {len(docvqa_dataset['train']) + len(docvqa_dataset['validation']) + len(docvqa_dataset['test'])} samples")
+
+# train_ds = load_dataset("hxlinh/SP-DocVQA", split="train").shuffle(seed=42).select(range(6000))
+# val_ds = load_dataset("hxlinh/SP-DocVQA", split="val").shuffle(seed=42).select(range(1200))
+# test_ds = load_dataset("hxlinh/SP-DocVQA", split="val").shuffle(seed=42).select(range(1200,2400))
+# test_ds_2 = load_dataset("nielsr/docvqa_1200_examples", split="test")
+
+# docvqa_dataset = DatasetDict({
+#     'train': train_ds,
+#     'validation': val_ds,
+#     'test': test_ds
+# })
+
+# print(" THỐNG KÊ DATASET:")
+# print(f"   • Train: {len(docvqa_dataset['train'])} samples")
+# print(f"   • Validation: {len(docvqa_dataset['validation'])} samples")
+# print(f"   • Test: {len(docvqa_dataset['test'])} samples")
+# print(f"   • Tổng: {len(docvqa_dataset['train']) + len(docvqa_dataset['validation']) + len(docvqa_dataset['test'])} samples")
 
 t5_config_docvqa = get_t5_config()
 
@@ -341,8 +345,8 @@ if ENABLE_PRETRAIN and os.path.exists(PRETRAIN_DATA_PATH):
     _, _, pretrained_model_path = pretrain_arctic_tilt(
         data_root=PRETRAIN_DATA_PATH,
         output_dir=pretrain_output_dir,
-        # config=pretrain_config,
-        config=t5_config_docvqa,
+        config=pretrain_config,
+        # config=t5_config_docvqa,
         tokenizer=tokenizer_docqa,
         num_epochs=PRETRAIN_MAX_EPOCHS,
         batch_size=PRETRAIN_BATCH_SIZE,
@@ -429,7 +433,8 @@ collate_fn_docqa = DocVQACollateFn(
     tokenizer_docqa,
     max_source_length=t5_config_docvqa.model_max_length,
     max_target_length=t5_config_docvqa.max_target_length,
-    use_chunked_processing=t5_config_docvqa.use_chunked_processing
+    use_chunked_processing=t5_config_docvqa.use_chunked_processing,
+    pad_to_multiple_of=PAD_TO_MULTIPLE_OF
 )
 
 print(f"\n DATASET LOADERS:")
@@ -499,14 +504,15 @@ print(f"   • Cosine decay (10%): {cosine_steps} steps")
 training_args = TrainingArguments(
     # Output
     output_dir=CKPT_PATH_DOCQA,
-    overwrite_output_dir=True,
+    # overwrite_output_dir=True,
 
     # Training
     num_train_epochs=num_epochs,
     per_device_train_batch_size=batch_size,
     per_device_eval_batch_size=batch_size,
     gradient_accumulation_steps=grad_acc_steps,
-    gradient_checkpointing=True,
+    gradient_checkpointing=False if USE_FP8 else True,
+    gradient_checkpointing_kwargs={"use_reentrant": False} if not USE_FP8 else None,
     max_grad_norm = 1,
 
     # Optimization (Arctic-TILT settings)
@@ -540,7 +546,7 @@ training_args = TrainingArguments(
 
     # Format
     remove_unused_columns=False,
-    save_safetensors=False,
+    # save_safetensors=False,
 
     # Reporting
     report_to=["wandb"],
@@ -568,7 +574,8 @@ validation_callback = ValidationMetricsCallback(
 )
 
 # Initialize trainer
-trainer = Trainer(
+# trainer = Trainer(
+trainer = CustomTrainer(
     model=model,
     args=training_args,
     train_dataset=train_ds_docqa,
@@ -644,7 +651,8 @@ print(f" Loading model from: {best_model_path}")
 eval_model = TiLTDocQATransformer(t5_config_docvqa)
 eval_model.load_state_dict(
     torch.load(os.path.join(best_model_path, "pytorch_model.bin"),
-               map_location=device)
+               map_location=device),
+    strict=False
 )
 
 eval_model.to(device)
@@ -754,98 +762,98 @@ print(f"All results saved to: {CKPT_PATH_DOCQA}")
 
 # -------------------------------------------
 
-print("\n Running final evaluation on test set 2...")
+# print("\n Running final evaluation on test set 2...")
 
-test_ds_docqa_2 = DocVQADataset(
-    test_ds_2,
-    tokenizer=tokenizer_docqa,
-    max_source_length=t5_config_docvqa.model_max_length,
-    max_target_length=t5_config_docvqa.max_target_length,
-    transform=transform_docqa,
-    language='en',
-    use_chunked_processing=t5_config_docvqa.use_chunked_processing
-)
+# test_ds_docqa_2 = DocVQADataset(
+#     test_ds_2,
+#     tokenizer=tokenizer_docqa,
+#     max_source_length=t5_config_docvqa.model_max_length,
+#     max_target_length=t5_config_docvqa.max_target_length,
+#     transform=transform_docqa,
+#     language='en',
+#     use_chunked_processing=t5_config_docvqa.use_chunked_processing
+# )
 
-best_model_path = os.path.join(CKPT_PATH_DOCQA, "final_model")
+# best_model_path = os.path.join(CKPT_PATH_DOCQA, "final_model")
 
-if not os.path.exists(best_model_path):
-    # Fallback: tìm checkpoint tốt nhất
-    checkpoints = [d for d in os.listdir(CKPT_PATH_DOCQA)
-                  if d.startswith("checkpoint-")]
-    if checkpoints:
-        # Trainer tự động lưu best checkpoint
-        best_model_path = os.path.join(CKPT_PATH_DOCQA,
-                                       trainer.state.best_model_checkpoint.split('/')[-1])
-        print(f" Loading best checkpoint: {best_model_path}")
+# if not os.path.exists(best_model_path):
+#     # Fallback: tìm checkpoint tốt nhất
+#     checkpoints = [d for d in os.listdir(CKPT_PATH_DOCQA)
+#                   if d.startswith("checkpoint-")]
+#     if checkpoints:
+#         # Trainer tự động lưu best checkpoint
+#         best_model_path = os.path.join(CKPT_PATH_DOCQA,
+#                                        trainer.state.best_model_checkpoint.split('/')[-1])
+#         print(f" Loading best checkpoint: {best_model_path}")
 
-print(f" Loading model from: {best_model_path}")
-model = TiLTDocQATransformer(t5_config_docvqa)
-model.load_state_dict(torch.load(os.path.join(best_model_path, "pytorch_model.bin")))
+# print(f" Loading model from: {best_model_path}")
+# model = TiLTDocQATransformer(t5_config_docvqa)
+# model.load_state_dict(torch.load(os.path.join(best_model_path, "pytorch_model.bin")))
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model.to(device)
-model.eval()
-all_predictions = []
-all_references = []
-all_questions = []
+# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# model.to(device)
+# model.eval()
+# all_predictions = []
+# all_references = []
+# all_questions = []
 
-test_dataloader = DataLoader(
-    test_ds_docqa_2,
-    batch_size=1,
-    shuffle=False,
-    collate_fn=collate_fn_docqa,
-    num_workers=8
-)
+# test_dataloader = DataLoader(
+#     test_ds_docqa_2,
+#     batch_size=1,
+#     shuffle=False,
+#     collate_fn=collate_fn_docqa,
+#     num_workers=8
+# )
 
-with torch.no_grad():
-    for batch in tqdm(test_dataloader, desc="Testing"):
-        batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v
-                for k, v in batch.items()}
+# with torch.no_grad():
+#     for batch in tqdm(test_dataloader, desc="Testing"):
+#         batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v
+#                 for k, v in batch.items()}
 
-        generated_ids = model.generate(
-            batch,
-            max_length=128,
-            num_beams=4,
-            early_stopping=True
-        )
+#         generated_ids = model.generate(
+#             batch,
+#             max_length=128,
+#             num_beams=4,
+#             early_stopping=True
+#         )
 
-        predictions = tokenizer_docqa.batch_decode(
-            generated_ids,
-            skip_special_tokens=True
-        )
+#         predictions = tokenizer_docqa.batch_decode(
+#             generated_ids,
+#             skip_special_tokens=True
+#         )
 
-        all_predictions.extend(predictions)
-        all_references.extend([[answer] for answer in batch['answers']])
-        all_questions.extend(batch['questions'])
+#         all_predictions.extend(predictions)
+#         all_references.extend([[answer] for answer in batch['answers']])
+#         all_questions.extend(batch['questions'])
 
-# Compute final metrics
-final_metrics = compute_docqa_metrics(all_predictions, all_references)
+# # Compute final metrics
+# final_metrics = compute_docqa_metrics(all_predictions, all_references)
 
-print("\n" + "="*60)
-print(" FINAL TEST RESULTS:")
-print(f"   • Exact Match: {final_metrics['exact_match']:.2f}%")
-print(f"   • F1 Score: {final_metrics['f1']:.2f}%")
-print(f"   • ANLS: {final_metrics['anls']:.4f}")
-print("="*60)
+# print("\n" + "="*60)
+# print(" FINAL TEST RESULTS:")
+# print(f"   • Exact Match: {final_metrics['exact_match']:.2f}%")
+# print(f"   • F1 Score: {final_metrics['f1']:.2f}%")
+# print(f"   • ANLS: {final_metrics['anls']:.4f}")
+# print("="*60)
 
-print(f"\n SAMPLE TEST PREDICTIONS:")
-print("="*80)
-num_samples = min(10, len(all_predictions))
-for i in range(num_samples):
-    print(f"Sample {i+1}:")
-    print(f"  Question: {all_questions[i]}")
-    print(f"  Ground Truth: {all_references[i][0]}")
-    print(f"  Prediction: {all_predictions[i]}")
-    print("-"*80)
+# print(f"\n SAMPLE TEST PREDICTIONS:")
+# print("="*80)
+# num_samples = min(10, len(all_predictions))
+# for i in range(num_samples):
+#     print(f"Sample {i+1}:")
+#     print(f"  Question: {all_questions[i]}")
+#     print(f"  Ground Truth: {all_references[i][0]}")
+#     print(f"  Prediction: {all_predictions[i]}")
+#     print("-"*80)
 
-# Log to wandb
-# if training_args.report_to and "wandb" in training_args.report_to:
-#     import wandb
-#     wandb.log({
-#         "test_exact_match": final_metrics['exact_match'],
-#         "test_f1": final_metrics['f1'],
-#         "test_anls": final_metrics['anls']
-#     })
-#     wandb.finish()
+# # Log to wandb
+# # if training_args.report_to and "wandb" in training_args.report_to:
+# #     import wandb
+# #     wandb.log({
+# #         "test_exact_match": final_metrics['exact_match'],
+# #         "test_f1": final_metrics['f1'],
+# #         "test_anls": final_metrics['anls']
+# #     })
+# #     wandb.finish()
 
-print("\n🎉 All done!")
+# print("\n🎉 All done!")
