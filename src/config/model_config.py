@@ -28,10 +28,14 @@ CHUNK_OVERLAP = 0
 USE_CHUNKED_PROCESSING = True
 PREFIX_LENGTH = 8
 
+USE_FP8 = True
+PAD_TO_MULTIPLE_OF = 16
+
 PRETRAIN_MAX_EPOCHS = 1
 PRETRAIN_BATCH_SIZE = 2
 PRETRAIN_GRAD_ACC_STEPS = 64
-MAX_EPOCHS = 15
+    
+MAX_EPOCHS = 10
 BATCH_SIZE = 4
 GRAD_ACC_STEPS = 2
 
@@ -59,6 +63,7 @@ def get_t5_config():
         chunk_overlap=CHUNK_OVERLAP,
         use_chunked_processing=USE_CHUNKED_PROCESSING,
         prefix_length=PREFIX_LENGTH,
+        pad_to_multiple_of=PAD_TO_MULTIPLE_OF,
         task_type="document_qa",
         # use_case_augmentation = False,
         # randomly discard chunks
@@ -72,5 +77,7 @@ def get_t5_config():
 def get_pretrain_config():
     """Return config for pretraining with lower max_length"""
     config = get_t5_config()
-    config.model_max_length = PRETRAIN_MAX_LENGTH
+    # config.model_max_length = PRETRAIN_MAX_LENGTH
+    config.enable_chunk_discard = False
+    config.enable_chunk_discard_v2 = False
     return config
