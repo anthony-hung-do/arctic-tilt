@@ -153,9 +153,9 @@ def pretrain_arctic_tilt(
         # max_steps=11698,
         per_device_train_batch_size=batch_size,
         gradient_accumulation_steps=PRETRAIN_GRAD_ACC_STEPS,
-        gradient_checkpointing=False if USE_FP8 else True,
         max_grad_norm=1.0,
-        gradient_checkpointing_kwargs={"use_reentrant": False} if not USE_FP8 else None,
+        gradient_checkpointing=True,
+        gradient_checkpointing_kwargs={"use_reentrant": False},
         
         learning_rate=learning_rate,
         weight_decay=1e-5,
@@ -511,8 +511,10 @@ training_args = TrainingArguments(
     per_device_train_batch_size=batch_size,
     per_device_eval_batch_size=batch_size,
     gradient_accumulation_steps=grad_acc_steps,
-    gradient_checkpointing=False if USE_FP8 else True,
-    gradient_checkpointing_kwargs={"use_reentrant": False} if not USE_FP8 else None,
+    # gradient_checkpointing=False if USE_FP8 else True,
+    # gradient_checkpointing_kwargs={"use_reentrant": False} if not USE_FP8 else None,
+    gradient_checkpointing=True,
+    gradient_checkpointing_kwargs={"use_reentrant": False},
     max_grad_norm = 1,
 
     # Optimization (Arctic-TILT settings)
