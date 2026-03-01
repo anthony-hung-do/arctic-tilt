@@ -11,6 +11,26 @@ import torch.nn as nn
 import random
 from config.model_config import USE_FP8
 
+# Transformer Engine for FP8
+try:
+    import transformer_engine.pytorch as te
+    TE_AVAILABLE = True
+    print("Transformer Engine available.")
+except ImportError:
+    TE_AVAILABLE = False
+    print("Warning: Transformer Engine not available. Using standard PyTorch layers.")
+
+def LinearLayer(in_features, out_features, bias=False, use_fp8=None):
+    if use_fp8 is None:
+        use_fp8 = USE_FP8
+    
+    if use_fp8 and TE_AVAILABLE:
+        # Use Transformer Engine Linear with FP8 support
+        return te.Linear(in_features, out_features, bias=bias)
+    else:
+        # Use standard PyTorch Linear
+        return nn.Linear(in_features, out_features, bias=bias)
+
 class ChunkedProcessor:
     def __init__(self, core_chunk_length: int = 1024, chunk_overlap: int = 0, debug: bool = False, enable_chunk_discard: bool = False, chunk_discard_ratio: float = 0.6, enable_chunk_discard_v2: bool = False, pad_to_multiple_of: int = 16):
         if pad_to_multiple_of > 1:
@@ -543,9 +563,12 @@ class TiltPostFusionModule(nn.Module):
     def __init__(self, d_model: int, dropout: float, layer_norm: TiltLayerNorm):
         super().__init__()
         self.layer_norm = layer_norm
-        self.to_v = nn.Linear(d_model, d_model, bias=False)
-        self.to_out = nn.Linear(d_model, d_model, bias=False)
-        self.to_r = nn.Linear(d_model, d_model, bias=False)
+        # self.to_v = nn.Linear(d_model, d_model, bias=False)
+        # self.to_out = nn.Linear(d_model, d_model, bias=False)
+        # self.to_r = nn.Linear(d_model, d_model, bias=False)
+        self.to_v = LinearLayer(d_model, d_model, bias=False)
+        self.to_out = LinearLayer(d_model, d_model, bias=False)
+        self.to_r = LinearLayer(d_model, d_model, bias=False)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, text_queries: torch.Tensor, image_queries: torch.Tensor) -> torch.Tensor:
@@ -607,8 +630,10 @@ class T5LayerNorm(nn.Module):
 class T5DenseActDense(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.wi = nn.Linear(config.d_model, config.d_ff, bias=False)
-        self.wo = nn.Linear(config.d_ff, config.d_model, bias=False)
+        # self.wi = nn.Linear(config.d_model, config.d_ff, bias=False)
+        # self.wo = nn.Linear(config.d_ff, config.d_model, bias=False)
+        self.wi = LinearLayer(config.d_model, config.d_ff, bias=False)
+        self.wo = LinearLayer(config.d_ff, config.d_model, bias=False)
         self.dropout = nn.Dropout(config.dropout_rate)
         self.act = nn.ReLU()
 
@@ -625,9 +650,12 @@ class T5DenseActDense(nn.Module):
 class T5DenseGatedActDense(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.wi_0 = nn.Linear(config.d_model, config.d_ff, bias=False)
-        self.wi_1 = nn.Linear(config.d_model, config.d_ff, bias=False)
-        self.wo = nn.Linear(config.d_ff, config.d_model, bias=False)
+        # self.wi_0 = nn.Linear(config.d_model, config.d_ff, bias=False)
+        # self.wi_1 = nn.Linear(config.d_model, config.d_ff, bias=False)
+        # self.wo = nn.Linear(config.d_ff, config.d_model, bias=False)
+        self.wi_0 = LinearLayer(config.d_model, config.d_ff, bias=False)
+        self.wi_1 = LinearLayer(config.d_model, config.d_ff, bias=False)
+        self.wo = LinearLayer(config.d_ff, config.d_model, bias=False)
         self.dropout = nn.Dropout(config.dropout_rate)
         self.act = nn.ReLU()
 
@@ -674,10 +702,14 @@ class T5Attention(nn.Module):
         self.dropout = config.dropout_rate
         self.inner_dim = self.n_heads * self.key_value_proj_dim
 
-        self.q = nn.Linear(self.d_model, self.inner_dim, bias=False)
-        self.k = nn.Linear(self.d_model, self.inner_dim, bias=False)
-        self.v = nn.Linear(self.d_model, self.inner_dim, bias=False)
-        self.o = nn.Linear(self.inner_dim, self.d_model, bias=False)
+        # self.q = nn.Linear(self.d_model, self.inner_dim, bias=False)
+        # self.k = nn.Linear(self.d_model, self.inner_dim, bias=False)
+        # self.v = nn.Linear(self.d_model, self.inner_dim, bias=False)
+        # self.o = nn.Linear(self.inner_dim, self.d_model, bias=False)
+        self.q = LinearLayer(self.d_model, self.inner_dim, bias=False)
+        self.k = LinearLayer(self.d_model, self.inner_dim, bias=False)
+        self.v = LinearLayer(self.d_model, self.inner_dim, bias=False)
+        self.o = LinearLayer(self.inner_dim, self.d_model, bias=False)
 
         '''
         Here is where the change lies, i.e adding the relative_horizontal_bias as well as the relative_vertical_bias
@@ -1771,7 +1803,8 @@ class T5ForConditionalGenerationAbstractive(t5.modeling_t5.T5ForConditionalGener
 
         self.encoder = T5Stack(encoder_config, self.shared)
         self.decoder = T5Stack(decoder_config, self.shared)
-        self.lm_head = nn.Linear(in_features=config.d_model,
+        # self.lm_head = nn.Linear(in_features=config.d_model,
+        self.lm_head = LinearLayer(in_features=config.d_model,
                                  out_features=config.num_classes, bias=False)
 
         if config.load_weights:

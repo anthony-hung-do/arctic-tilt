@@ -2,12 +2,22 @@ import torch.nn as nn
 from .visual_embedding import VisualEmbedding
 from .t5_custom import T5ForConditionalGeneration
 
+# Import Transformer Engine for FP8 autocast
+try:
+    import transformer_engine.pytorch as te
+    TE_AVAILABLE = True
+except ImportError:
+    TE_AVAILABLE = False
+
 class TiLTDocQATransformer(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
         self.visual_embedding_extractor = VisualEmbedding(config)
         self.t5_model = T5ForConditionalGeneration(config)
+        
+        # Store FP8 config
+        self.use_fp8 = getattr(config, 'use_fp8', False) and TE_AVAILABLE
 
     def common_step(self, batch):
         ## Visual embedding
@@ -54,12 +64,22 @@ class TiLTDocQATransformer(nn.Module):
         embeddings, vision_embeddings = self.common_step(batch)
 
         # Arctic-TILT: Pass vision embeddings to be used in each transformer block
-        final_output = self.t5_model(
-            attention_mask=batch['attention_mask'],
-            inputs_embeds=embeddings,
-            labels=batch['labels'],
-            vision_embeddings=vision_embeddings
-        )
+        # Wrap forward pass with FP8 autocast if enabled
+        if self.use_fp8 and self.training:
+            with te.fp8_autocast(enabled=True):
+                final_output = self.t5_model(
+                    attention_mask=batch['attention_mask'],
+                    inputs_embeds=embeddings,
+                    labels=batch['labels'],
+                    vision_embeddings=vision_embeddings
+                )
+        else:
+            final_output = self.t5_model(
+                attention_mask=batch['attention_mask'],
+                inputs_embeds=embeddings,
+                labels=batch['labels'],
+                vision_embeddings=vision_embeddings
+            )
 
         return final_output
 

@@ -31,6 +31,10 @@ PREFIX_LENGTH = 8
 USE_FP8 = True
 PAD_TO_MULTIPLE_OF = 16
 
+ENABLE_CHUNK_DISCARD = False
+CHUNK_DISCARD_RATIO = 0.6
+ENABLE_CHUNK_DISCARD_V2 = False
+
 PRETRAIN_MAX_EPOCHS = 1
 PRETRAIN_BATCH_SIZE = 2
 PRETRAIN_GRAD_ACC_STEPS = 64
@@ -65,12 +69,13 @@ def get_t5_config():
         prefix_length=PREFIX_LENGTH,
         pad_to_multiple_of=PAD_TO_MULTIPLE_OF,
         task_type="document_qa",
+        use_fp8=USE_FP8, 
         # use_case_augmentation = False,
         # randomly discard chunks
-        enable_chunk_discard = True,
-        chunk_discard_ratio = 0.6,
+        enable_chunk_discard = ENABLE_CHUNK_DISCARD,
+        chunk_discard_ratio = CHUNK_DISCARD_RATIO,
         # discard chunks v2
-        enable_chunk_discard_v2 = True,
+        enable_chunk_discard_v2 = ENABLE_CHUNK_DISCARD_V2,
     ))
     return config
 
